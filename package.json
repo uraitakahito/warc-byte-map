@@ -1,0 +1,48 @@
+{
+  "//": [
+    "Discussion on how to write comments in package.json:",
+    "https://stackoverflow.com/questions/14221579/how-do-i-add-comments-to-package-json-for-npm-install",
+    "",
+    "version は版ではない。版は main の commit に手で打つ注釈タグ（vX.Y.Z）だけで、",
+    "Pages もそのタグの push で出る（`.github/workflows/pages.yml`）。",
+    "private: npm には出さない。読み手（src/map/）を別の repo から使う日が来たら、そのとき決める。",
+    "typecheck は 2 回走る。2 回目の `src/map/tsconfig.json` は DOM と Node の型を持たないので、",
+    "読み手が document や node:* に触れると、そこで赤になる。",
+    "Vite の設定（`vite.config.ts`）と Vitest の設定（`vitest.config.ts`）を分けたのは、",
+    "頁の根（site/）と試験の根（repo の根）が違うから。"
+  ],
+  "name": "warc-byte-map",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Show which bytes of a WARC file each term of the WARC 1.1 specification refers to.",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json && tsc -p src/map/tsconfig.json",
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "site:dev": "vite",
+    "site:build": "vite build",
+    "site:preview": "vite preview",
+    "audit": "pnpm audit --audit-level=low",
+    "check": "pnpm run audit && pnpm run typecheck && pnpm run lint && pnpm test && pnpm run site:build"
+  },
+  "author": "Takahito Urai",
+  "license": "Unlicense",
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.6.6",
+    "eslint": "^10.14.0",
+    "eslint-import-resolver-typescript": "^4.4.5",
+    "eslint-plugin-import-x": "^4.17.1",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.72.1",
+    "vite": "^8.3.5",
+    "vitest": "^5.1.0"
+  },
+  "packageManager": "pnpm@11.20.0+sha512.9a6f330a95b66446ea088faf1521405a8a01f07fde7124cc9958dfed52d4bb436737e65b08f85f37b46fcba375092558ac51262b816844b22f63406ed166bfee",
+  "engines": {
+    "node": ">=24"
+  }
+}

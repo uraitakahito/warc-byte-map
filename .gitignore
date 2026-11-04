@@ -1,0 +1,12 @@
+/node_modules/
+/dist-site/
+
+# TypeScript build info
+*.tsbuildinfo
+
+# OS / エディタ / ローカルの副産物
+.DS_Store
+.idea/
+.vscode/
+*.local
+*.log

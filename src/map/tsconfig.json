@@ -1,0 +1,13 @@
+{
+  // 読み手（src/map/）だけを、DOM も Node も無い型の世界で検査する。
+  //
+  // 読み手はブラウザ（viewer）でも Node（試験）でも動く約束で、その約束をここで型で守る。
+  // document・window・fetch・console・Buffer・node:* のどれかに触れれば、ここで赤になる。
+  // bytes から文字への変換も、TextDecoder（ES の外）に頼らずに書く。
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2024"],
+    "types": []
+  },
+  "include": ["./**/*.ts"]
+}

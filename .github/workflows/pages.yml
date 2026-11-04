@@ -1,0 +1,60 @@
+name: pages
+
+# viewer の頁（site/）を GitHub Pages に出す。
+#
+# 版のタグ（v*）の push のときだけ。公開の頁は出した版と 1 対 1 にする（main には、まだ
+# 出していない変更も載る）。環境 github-pages は、v* のタグからの deployment だけを許す
+# （repo の設定。main や枝から走らせても、環境の規則で断られる）。
+# 出し直すときは: gh workflow run pages.yml --ref vX.Y.Z
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+# 出す途中で切らない。出しかけの頁は、待つより悪い。
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build the site
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the site
+        run: pnpm run site:build
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: dist-site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: [build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

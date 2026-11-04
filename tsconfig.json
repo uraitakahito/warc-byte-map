@@ -1,0 +1,56 @@
+{
+  "compilerOptions": {
+    /*
+     * Type Checking
+     * https://www.typescriptlang.org/tsconfig/#Type_Checking_6248
+     */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noPropertyAccessFromIndexSignature": true,
+
+    /*
+     * Modules
+     * https://www.typescriptlang.org/tsconfig/#Modules_6244
+     *
+     * tsc は何も吐かない（検査だけ）。頁は Vite が、試験は Vitest が、scripts/ は Node の
+     * type stripping が、それぞれ .ts をそのまま読む。だから import は `.ts` まで書き
+     * （allowImportingTsExtensions）、型だけの import は `import type` と書く
+     * （verbatimModuleSyntax。Node は型を消すだけで、import の行き先を書き換えない）。
+     */
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    // Node の type stripping で走る書き方だけを許す（enum・namespace・parameter properties を使わない）
+    "erasableSyntaxOnly": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "noEmit": true,
+
+    /*
+     * Interop Constraints
+     * https://www.typescriptlang.org/tsconfig/#Interop_Constraints_6252
+     */
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+
+    /*
+     * Language and Environment
+     * https://www.typescriptlang.org/tsconfig/#Language_and_Environment_6254
+     *
+     * DOM は viewer（src/viewer/）のため、node は試験と scripts/ と設定のため。読み手
+     * （src/map/）はどちらも使わない約束で、それは src/map/tsconfig.json が別に検査する。
+     * types を書くのは、TypeScript 6 が node_modules/@types を自動では入れないから。
+     */
+    "target": "ES2024",
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "types": ["node"]
+  },
+  "include": ["src/**/*", "test/**/*", "scripts/**/*", "vite.config.ts", "vitest.config.ts"]
+}
