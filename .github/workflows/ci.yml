@@ -1,0 +1,45 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      # setup-node の `cache: pnpm` が store の場所を pnpm に聞くので、その前に置く。
+      # pnpm の版は package.json の packageManager から読む。
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type check
+        run: pnpm run typecheck
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Tests
+        run: pnpm test
+
+      # 頁が建つことも PR で確かめる。Pages に出すのは版のタグの push のときだけ（pages.yml）。
+      - name: Build the site
+        run: pnpm run site:build

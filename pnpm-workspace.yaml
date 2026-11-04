@@ -1,0 +1,11 @@
+# audit から外す勧告。外すのは、上流が修正版を受け取れず、override でも越えられないものだけ。
+# 1 件ごとに、なぜ越えられないかと、外す条件を書く。
+auditConfig:
+  ignoreGhsas:
+    # minimatch: globparts の増幅による DoS。修正は 11.0.1 からで、10 系には無い。
+    # 11 は名前付きの書き出し makeRe をやめたので、override で 11 にすると eslint-plugin-import-x が
+    # 読み込みで落ちる（browserhive の #798 で実測）。eslint 10.14・@eslint/config-array 0.23・
+    # import-x 4.17 の最新版が、どれも 11 を受けない（^10 まで。2026-11-05 に npm view で確かめた）。
+    # 木の中の minimatch が読むのは、ESLint の設定と lint の対象（この repo の物）だけ。
+    # 外す条件: これらの親が ^11 を要求する版を出したとき（そのとき update で直る）。
+    - GHSA-g3hv-75wg-m249
