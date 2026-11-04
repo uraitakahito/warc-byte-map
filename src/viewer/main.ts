@@ -1,4 +1,483 @@
-// FIXME(段 2 で消す): 頁が建つことだけを確かめる置き場。viewer の最小（record の一覧・
-// カード・hex）に置き換える。
-const app = document.querySelector("#app");
-if (app !== null) app.textContent = "warc-byte-map（準備中）";
+/**
+ * viewer の頁。WARC を読み手（src/map/）で地図にし、record の一覧・部分の木・hex を描く。
+ *
+ * 部分の木の行と hex の octet は互いに強調し合う。いま見ている物は URL の hash に書く
+ * （hash.ts）ので、その URL がそのまま link になる。
+ */
+import { fieldText, lastField, mapWarc } from "../map/index.ts";
+import { deepestAt, findPart, partTree, type PartKind, type PartNode } from "../map/parts.ts";
+import type { Span } from "../map/span.ts";
+import type { FieldMap, RecordMap, WarcMap } from "../map/types.ts";
+import { formatHash, parseHash, type ViewState } from "./hash.ts";
+import { glyph, hex2, visibleRanges } from "./hex.ts";
+import { FIELD_SECTIONS, PROBLEMS, SPEC_PAGE, TERMS, sectionUrl, type Lang, type Section } from "./terms.ts";
+
+/** 開ける file の上限。読み手は 100 MiB を 0.2 秒で読む（2026-11-05 に測った）ので、決めるのはメモリ。 */
+const MAX_BYTES = 256 * 1024 * 1024;
+/** 一覧に並べる record の上限。行を全部作ると、大きな file で頁が重くなる。 */
+const MAX_LISTED = 5000;
+const PRIMER = "https://uraitakahito.github.io/warc-specifications/primers/web-archive-formats/";
+const EXAMPLE = `${PRIMER}hello-world.warc`;
+const GZIP_MAGIC = [0x1f, 0x8b];
+/** 既定で畳む節。名前・コロン・値などの葉が多く、開いたままだとカードが長くなる。 */
+const FOLDABLE: ReadonlySet<PartKind> = new Set(["version", "field", "folded", "unreadable"]);
+
+const UI = {
+  tagline: { ja: "WARC の仕様の用語が、file のどの byte を指すかを見る", en: "See which bytes of a WARC file each term of the specification refers to" },
+  example: { ja: "例を開く: hello-world.warc", en: "Open the example: hello-world.warc" },
+  exampleNote: {
+    ja: "IIPC の primer の例（WARC/1.0・6 つの record）。fork の頁から読む。",
+    en: "The example from the IIPC primer (WARC/1.0, six records), read from the fork's site.",
+  },
+  openFile: { ja: "手元の WARC を開く（.warc）", en: "Open a local WARC (.warc)" },
+  dropHint: { ja: "file をこの頁に落としても開ける。手元の file は送られない。", en: "You can also drop a file on this page. Local files are not uploaded." },
+  loading: { ja: "読んでいる…", en: "Loading…" },
+  tooLarge: { ja: "大きすぎる（256 MiB まで）。", en: "Too large (up to 256 MiB)." },
+  gzip: { ja: "圧縮した WARC（.warc.gz）は、まだ開けない。", en: "Compressed WARC (.warc.gz) is not supported yet." },
+  failed: { ja: "読めなかった", en: "Could not load" },
+  records: { ja: "record", en: "Records" },
+  listCut: { ja: "件目まで並べた", en: "listed" },
+  rest: { ja: "record として読めない残り", en: "Bytes not readable as records" },
+  problems: { ja: "見つかった問題", en: "Problems found" },
+  copy: { ja: "link を写す", en: "Copy link" },
+  copied: { ja: "写した", en: "Copied" },
+  copyFailed: { ja: "写せなかった", en: "Could not copy" },
+  octets: { ja: "octet", en: "octets" },
+  none: { ja: "（無し）", en: "(none)" },
+  omitted: { ja: "octet を省いた", en: "octets omitted" },
+  spec: { ja: "注釈つきの WARC 1.1", en: "Annotated WARC 1.1" },
+  other: { ja: "English", en: "日本語" },
+  back: { ja: "ほかの file を開く", en: "Open another file" },
+} as const;
+
+const utf8 = new TextDecoder("utf-8");
+
+interface Loaded {
+  readonly bytes: Uint8Array;
+  readonly map: WarcMap;
+  readonly name: string;
+}
+
+interface Shown {
+  readonly record: RecordMap;
+  readonly tree: PartNode;
+  /** octet の位置 → その octet を描いた hex と text の要素。 */
+  readonly cells: Map<number, HTMLElement[]>;
+  /** 部分の id → 部分の木の行。 */
+  readonly rows: Map<string, HTMLElement>;
+}
+
+let view: ViewState = parseHash(location.hash);
+let loaded: Loaded | undefined;
+let shown: Shown | undefined;
+let status: { text: string; error: boolean } | undefined;
+/** 強調している範囲（hover と、選んだ物）。 */
+const lit: Record<"hover" | "sel", Span | undefined> = { hover: undefined, sel: undefined };
+
+const lang = (): Lang => view.lang ?? (navigator.language.toLowerCase().startsWith("ja") ? "ja" : "en");
+const tr = (text: Readonly<Record<Lang, string>>): string => text[lang()];
+
+const el = <K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  attrs: Readonly<Record<string, string>> = {},
+  ...children: (Node | string)[]
+): HTMLElementTagNameMap[K] => {
+  const node = document.createElement(tag);
+  for (const [name, value] of Object.entries(attrs)) node.setAttribute(name, value);
+  node.append(...children);
+  return node;
+};
+
+const text = (bytes: Uint8Array, span: Span): string => utf8.decode(bytes.subarray(span.start, span.end));
+const length = (span: Span): number => span.end - span.start;
+const rangeText = (span: Span): string => `${String(span.start)}–${String(span.end)}（${String(length(span))}）`;
+const clip = (s: string, n = 72): string => (s.length > n ? `${s.slice(0, n)}…` : s);
+
+const writeHash = (): void => {
+  history.replaceState(null, "", `${location.pathname}${location.search}${formatHash(view)}`);
+};
+
+/** view から、選んだ部分と範囲を外す（exactOptionalPropertyTypes のもとで、鍵ごと消す）。 */
+const withoutSelection = ({ part: _part, bytes: _bytes, ...rest }: ViewState): ViewState => rest;
+
+// ── 強調 ──
+
+const paint = (which: "hover" | "sel", span: Span | undefined): void => {
+  const cells = shown?.cells;
+  if (cells === undefined) return;
+  const before = lit[which];
+  if (before !== undefined) {
+    for (let o = before.start; o < before.end; o++) cells.get(o)?.forEach((c) => { c.classList.remove(which); });
+  }
+  lit[which] = span;
+  if (span !== undefined) {
+    for (let o = span.start; o < span.end; o++) cells.get(o)?.forEach((c) => { c.classList.add(which); });
+  }
+};
+
+/** 畳んだ祖先の中の行なら、いちばん外の畳んだ祖先の行（見えている行）を返す。 */
+const visibleRow = (row: HTMLElement): HTMLElement => {
+  let visible = row;
+  for (let li = row.closest("li")?.parentElement?.closest("li"); li; li = li.parentElement?.closest("li")) {
+    if (li.classList.contains("foldable") && !li.classList.contains("open")) visible = li.querySelector<HTMLElement>(":scope > .row") ?? visible;
+  }
+  return visible;
+};
+
+/** 行の祖先の畳みを開く。 */
+const reveal = (row: HTMLElement): void => {
+  for (let li = row.closest("li")?.parentElement?.closest("li"); li; li = li.parentElement?.closest("li")) li.classList.add("open");
+};
+
+const markRow = (which: "hover" | "sel", id: string | undefined): void => {
+  shown?.rows.forEach((row) => { row.classList.remove(which); });
+  const row = id === undefined ? undefined : shown?.rows.get(id);
+  if (row !== undefined) visibleRow(row).classList.add(which);
+};
+
+const hover = (node: PartNode | undefined): void => {
+  paint("hover", node?.span);
+  markRow("hover", node?.id);
+};
+
+/** 部分を選ぶ。scroll なら、部分の木の行を開いて見える所まで送る（hex や link から選んだとき）。 */
+const select = (node: PartNode, scroll = false): void => {
+  const row = shown?.rows.get(node.id);
+  if (scroll && row !== undefined) {
+    reveal(row);
+    row.scrollIntoView({ block: "nearest" });
+  }
+  paint("sel", node.span);
+  markRow("sel", node.id);
+  view = { ...withoutSelection(view), part: node.id, bytes: node.span };
+  writeHash();
+};
+
+const selectBytes = (span: Span): void => {
+  paint("sel", span);
+  markRow("sel", undefined);
+  view = { ...withoutSelection(view), bytes: span };
+  writeHash();
+};
+
+// ── 部分の木 ──
+
+const fieldOf = (record: RecordMap, node: PartNode): FieldMap | undefined => {
+  const line = record.fields[Number(/^line\.(\d+)$/.exec(node.id)?.[1] ?? -1)];
+  return line?.kind === "field" ? line : undefined;
+};
+
+const sectionOf = (bytes: Uint8Array, record: RecordMap, node: PartNode): Section | undefined => {
+  const field = node.kind === "field" ? fieldOf(record, node) : undefined;
+  const named = field === undefined ? undefined : FIELD_SECTIONS[text(bytes, field.name).toLowerCase()];
+  return named ?? TERMS[node.kind].section;
+};
+
+const lineEnd = (bytes: Uint8Array, span: Span): string =>
+  Array.from(bytes.subarray(span.start, span.end), (b) => (b === 0x0d ? "CR" : b === 0x0a ? "LF" : hex2(b))).join(" ");
+
+const preview = (bytes: Uint8Array, record: RecordMap, node: PartNode): string => {
+  switch (node.kind) {
+    case "field": {
+      const field = fieldOf(record, node);
+      return field === undefined ? "" : clip(`${text(bytes, field.name)}: ${fieldText(bytes, field)}`);
+    }
+    case "version":
+    case "version-text":
+    case "field-name":
+    case "field-value":
+    case "unreadable":
+    case "unreadable-content":
+      return clip(text(bytes, node.kind === "version" ? record.version.text : node.span).trimEnd());
+    case "line-end":
+    case "separator":
+    case "blank":
+      return length(node.span) === 0 ? tr(UI.none) : lineEnd(bytes, node.span);
+    case "space":
+    case "indent":
+      return length(node.span) === 0 ? tr(UI.none) : lineEnd(bytes, node.span).replaceAll("20", "SP").replaceAll("09", "HT");
+    case "block":
+      return `${String(length(node.span))} ${tr(UI.octets)}`;
+    case "colon":
+    case "record":
+    case "header":
+    case "folded":
+      return "";
+  }
+};
+
+const treeItem = (bytes: Uint8Array, record: RecordMap, node: PartNode, rows: Map<string, HTMLElement>): HTMLLIElement => {
+  const term = TERMS[node.kind];
+  const section = sectionOf(bytes, record, node);
+  const row = el(
+    "div",
+    { class: `row k-${node.kind}`, "data-part": node.id },
+    el("span", { class: "label", title: term.note === undefined ? "" : tr(term.note) }, tr(term.label)),
+    el("span", { class: "preview" }, preview(bytes, record, node)),
+    el("span", { class: "range" }, rangeText(node.span)),
+    section === undefined ? "" : el("a", { class: "sec", href: sectionUrl(section), target: "_blank", rel: "noopener" }, `§${section.number}`),
+  );
+  row.addEventListener("mouseenter", () => { hover(node); });
+  row.addEventListener("mouseleave", () => { hover(undefined); });
+  row.addEventListener("click", (event) => {
+    if (!(event.target instanceof HTMLAnchorElement)) select(node);
+  });
+  rows.set(node.id, row);
+  const item = el("li", {}, row);
+  if (node.children.length === 0) return item;
+  if (FOLDABLE.has(node.kind)) {
+    item.classList.add("foldable");
+    const caret = el("button", { type: "button", class: "caret", "aria-label": "open" }, "▸");
+    caret.addEventListener("click", (event) => {
+      event.stopPropagation();
+      item.classList.toggle("open");
+    });
+    row.prepend(caret);
+  }
+  item.append(el("ul", {}, ...node.children.map((c) => treeItem(bytes, record, c, rows))));
+  return item;
+};
+
+// ── hex ──
+
+const hexPane = (bytes: Uint8Array, record: RecordMap, tree: PartNode, cells: Map<number, HTMLElement[]>): HTMLElement => {
+  const pane = el("div", { class: "hex" });
+  visibleRanges(record.record).forEach((range, i, all) => {
+    if (i > 0) {
+      const gap = range.start - (all[i - 1]?.end ?? range.start);
+      pane.append(el("div", { class: "gap" }, `… ${String(gap)} ${tr(UI.omitted)} …`));
+    }
+    for (let rowStart = range.start - (range.start % 16); rowStart < range.end; rowStart += 16) {
+      const hexCol = el("span", { class: "h" });
+      const textCol = el("span", { class: "t" });
+      for (let o = rowStart; o < rowStart + 16; o++) {
+        const b = bytes[o];
+        if (o < range.start || o >= range.end || b === undefined) {
+          hexCol.append(el("span", { class: "pad" }, "  "));
+          textCol.append(el("span", { class: "pad" }, " "));
+          continue;
+        }
+        const h = el("span", { "data-o": String(o) }, hex2(b));
+        const t = el("span", { "data-o": String(o) }, glyph(b));
+        cells.set(o, [h, t]);
+        hexCol.append(h);
+        textCol.append(t);
+      }
+      pane.append(el("div", { class: "line" }, el("span", { class: "o" }, rowStart.toString(16).padStart(8, "0")), hexCol, textCol));
+    }
+  });
+  const at = (event: Event): PartNode | undefined => {
+    const o = event.target instanceof HTMLElement ? event.target.dataset["o"] : undefined;
+    return o === undefined ? undefined : deepestAt(tree, Number(o));
+  };
+  pane.addEventListener("mouseover", (event) => { hover(at(event)); });
+  pane.addEventListener("mouseleave", () => { hover(undefined); });
+  pane.addEventListener("click", (event) => {
+    const node = at(event);
+    if (node !== undefined) select(node, true);
+  });
+  return pane;
+};
+
+// ── 画面 ──
+
+const recordLabel = (bytes: Uint8Array, record: RecordMap): string => {
+  const type = lastField(bytes, record.fields, "WARC-Type");
+  const target = lastField(bytes, record.fields, "WARC-Target-URI");
+  return [type, target].map((f) => (f === undefined ? "" : clip(fieldText(bytes, f), 48))).filter((s) => s !== "").join("  ");
+};
+
+const showRecord = (record: RecordMap): void => {
+  if (loaded === undefined) return;
+  const { bytes } = loaded;
+  const tree = partTree(record);
+  const cells = new Map<number, HTMLElement[]>();
+  const rows = new Map<string, HTMLElement>();
+  lit.hover = undefined;
+  lit.sel = undefined;
+
+  const problems = record.problems.map((p) => {
+    const item = el("li", {}, el("span", { class: "range" }, rangeText(p.span)), " ", tr(PROBLEMS[p.code]));
+    item.addEventListener("click", () => { selectBytes(p.span); });
+    return item;
+  });
+  const card = el(
+    "section",
+    { class: "card" },
+    el("h2", {}, `record #${String(record.index)}`, el("span", { class: "range" }, rangeText(record.record))),
+    problems.length === 0 ? "" : el("div", { class: "problems" }, el("h3", {}, tr(UI.problems)), el("ul", {}, ...problems)),
+    el("ul", { class: "tree" }, treeItem(bytes, record, tree, rows)),
+  );
+  const hex = hexPane(bytes, record, tree, cells);
+  shown = { record, tree, cells, rows };
+  document.querySelector("#card")?.replaceChildren(card);
+  document.querySelector("#bytes")?.replaceChildren(hex);
+  document.querySelectorAll("#list [data-rec]").forEach((item) => {
+    item.classList.toggle("sel", item.getAttribute("data-rec") === String(record.record.start));
+  });
+};
+
+const pickRecord = (record: RecordMap): void => {
+  view = { ...withoutSelection(view), rec: record.record.start };
+  writeHash();
+  showRecord(record);
+};
+
+const workspace = ({ bytes, map, name }: Loaded): HTMLElement => {
+  const items = map.records.slice(0, MAX_LISTED).map((record) => {
+    const item = el(
+      "li",
+      { "data-rec": String(record.record.start) },
+      el("span", { class: "idx" }, `#${String(record.index)}`),
+      el("span", { class: "what" }, recordLabel(bytes, record)),
+      el("span", { class: "range" }, rangeText(record.record)),
+      record.problems.length === 0 ? "" : el("span", { class: "warn" }, "!"),
+    );
+    item.addEventListener("click", () => { pickRecord(record); });
+    return item;
+  });
+  const list = el(
+    "nav",
+    { id: "list" },
+    el("h2", {}, name, el("span", { class: "range" }, `${String(map.records.length)} ${tr(UI.records)}`)),
+    el("ul", {}, ...items),
+    map.records.length > MAX_LISTED ? el("p", { class: "note" }, `${String(MAX_LISTED)} ${tr(UI.listCut)}`) : "",
+    map.rest === undefined
+      ? ""
+      : el("p", { class: "rest" }, `${tr(UI.rest)}: ${rangeText(map.rest)} — ${map.problems.map((p) => tr(PROBLEMS[p.code])).join(" ")}`),
+  );
+  return el("main", { class: "workspace" }, list, el("div", { id: "card" }), el("div", { id: "bytes" }));
+};
+
+const startPanel = (): HTMLElement => {
+  const input = el("input", { type: "file", accept: ".warc,application/warc" });
+  input.addEventListener("change", () => {
+    const file = input.files?.[0];
+    if (file !== undefined) void openFile(file);
+  });
+  return el(
+    "main",
+    { class: "start" },
+    el("p", {}, el("a", { class: "button", href: formatHash({ src: EXAMPLE, ...(view.lang !== undefined && { lang: view.lang }) }) }, tr(UI.example))),
+    el("p", { class: "note" }, tr(UI.exampleNote), " ", el("a", { href: PRIMER, target: "_blank", rel: "noopener" }, "primer")),
+    el("p", {}, el("label", { class: "button" }, tr(UI.openFile), input)),
+    el("p", { class: "note" }, tr(UI.dropHint)),
+    status === undefined ? "" : el("p", { class: status.error ? "error" : "note" }, status.text),
+  );
+};
+
+const topBar = (): HTMLElement => {
+  const other = lang() === "ja" ? "en" : "ja";
+  const switchLang = el("button", { type: "button" }, tr(UI.other));
+  switchLang.addEventListener("click", () => {
+    view = { ...view, lang: other };
+    writeHash();
+    render();
+  });
+  const copy = el("button", { type: "button" }, tr(UI.copy));
+  copy.addEventListener("click", () => {
+    navigator.clipboard.writeText(location.href).then(
+      () => { copy.textContent = tr(UI.copied); },
+      () => { copy.textContent = tr(UI.copyFailed); },
+    );
+  });
+  const back = el("button", { type: "button" }, tr(UI.back));
+  back.addEventListener("click", () => {
+    loaded = undefined;
+    shown = undefined;
+    status = undefined;
+    view = view.lang === undefined ? {} : { lang: view.lang };
+    writeHash();
+    render();
+  });
+  return el(
+    "header",
+    {},
+    el("h1", {}, "warc-byte-map"),
+    el("p", { class: "tagline" }, tr(UI.tagline), " — ", el("a", { href: SPEC_PAGE, target: "_blank", rel: "noopener" }, tr(UI.spec))),
+    el("div", { class: "tools" }, loaded === undefined ? "" : back, loaded !== undefined && view.src !== undefined ? copy : "", switchLang),
+  );
+};
+
+const render = (): void => {
+  document.documentElement.lang = lang();
+  const app = document.querySelector("#app");
+  if (app === null) return;
+  app.replaceChildren(topBar(), loaded === undefined ? startPanel() : workspace(loaded));
+  if (loaded === undefined) return;
+  const record = loaded.map.records.find((r) => r.record.start === view.rec) ?? loaded.map.records[0];
+  if (record === undefined) return;
+  showRecord(record);
+  const part = view.part === undefined || shown === undefined ? undefined : findPart(shown.tree, view.part);
+  if (part !== undefined) select(part, true);
+  else if (view.bytes !== undefined) selectBytes(view.bytes);
+};
+
+// ── 読み込み ──
+
+const open = (bytes: Uint8Array, name: string): void => {
+  if (GZIP_MAGIC.every((b, i) => bytes[i] === b)) {
+    loaded = undefined;
+    status = { text: tr(UI.gzip), error: true };
+  } else {
+    loaded = { bytes, map: mapWarc(bytes), name };
+    status = undefined;
+  }
+  render();
+};
+
+const fail = (error: unknown): void => {
+  loaded = undefined;
+  status = { text: `${tr(UI.failed)}: ${error instanceof Error ? error.message : String(error)}`, error: true };
+  render();
+};
+
+const openUrl = async (src: string): Promise<void> => {
+  loaded = undefined;
+  status = { text: tr(UI.loading), error: false };
+  render();
+  try {
+    const url = new URL(src, location.href);
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`HTTP ${String(response.status)}`);
+    if (Number(response.headers.get("content-length") ?? 0) > MAX_BYTES) throw new Error(tr(UI.tooLarge));
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.length > MAX_BYTES) throw new Error(tr(UI.tooLarge));
+    open(bytes, decodeURIComponent(url.pathname.split("/").at(-1) ?? src));
+  } catch (error) {
+    fail(error);
+  }
+};
+
+const openFile = async (file: File): Promise<void> => {
+  if (file.size > MAX_BYTES) {
+    fail(new Error(tr(UI.tooLarge)));
+    return;
+  }
+  // 手元の file は URL で指せないので、hash から src を外す
+  const { src: _src, ...rest } = withoutSelection(view);
+  view = rest;
+  writeHash();
+  try {
+    open(new Uint8Array(await file.arrayBuffer()), file.name);
+  } catch (error) {
+    fail(error);
+  }
+};
+
+window.addEventListener("hashchange", () => {
+  const next = parseHash(location.hash);
+  const reload = next.src !== undefined && next.src !== view.src;
+  view = next;
+  if (reload) void openUrl(next.src);
+  else render();
+});
+document.addEventListener("dragover", (event) => { event.preventDefault(); });
+document.addEventListener("drop", (event) => {
+  event.preventDefault();
+  const file = event.dataTransfer?.files[0];
+  if (file !== undefined) void openFile(file);
+});
+
+render();
+if (view.src !== undefined) void openUrl(view.src);
