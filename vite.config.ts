@@ -7,6 +7,9 @@ import { defineConfig } from "vite";
 const config = defineConfig({
   root: fileURLToPath(new URL("./site", import.meta.url)),
   base: "/warc-byte-map/",
+  // 無い URL は Pages と同じく 404 にする。既定の spa だと、手元の preview で viewer に化ける
+  // （viewer は hash だけで動くので、index.html への fallback は要らない）。
+  appType: "mpa",
   build: {
     outDir: fileURLToPath(new URL("./dist-site", import.meta.url)),
     emptyOutDir: true,

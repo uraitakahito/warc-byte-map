@@ -88,6 +88,7 @@ const UI = {
   none: { ja: "（無し）", en: "(none)" },
   omitted: { ja: "octet を省いた", en: "octets omitted" },
   spec: { ja: "注釈つきの WARC 1.1", en: "Annotated WARC 1.1" },
+  docs: { ja: "ドキュメント", en: "Documentation" },
   other: { ja: "English", en: "日本語" },
   payload: { ja: "payload", en: "Payload" },
   payloadHere: { ja: "この record の中", en: "In this record" },
@@ -647,7 +648,16 @@ const topBar = (): HTMLElement => {
     "header",
     {},
     el("h1", {}, "warc-byte-map"),
-    el("p", { class: "tagline" }, tr(UI.tagline), " — ", el("a", { href: SPEC_PAGE, target: "_blank", rel: "noopener" }, tr(UI.spec))),
+    el(
+      "p",
+      { class: "tagline" },
+      tr(UI.tagline),
+      " — ",
+      el("a", { href: SPEC_PAGE, target: "_blank", rel: "noopener" }, tr(UI.spec)),
+      " · ",
+      // 別のタブで開く。同じタブで離れると、開いている file が消える。行き先は scripts/check-doc-refs.ts が見る
+      el("a", { href: lang() === "ja" ? "docs/ja/" : "docs/", target: "_blank", rel: "noopener" }, tr(UI.docs)),
+    ),
     el("div", { class: "tools" }, loaded === undefined ? "" : back, loaded !== undefined && view.src !== undefined ? copy : "", switchLang),
   );
 };

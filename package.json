@@ -10,6 +10,9 @@
     "読み手が document や node:* に触れると、そこで赤になる。",
     "Vite の設定（`vite.config.ts`）と Vitest の設定（`vitest.config.ts`）を分けたのは、",
     "頁の根（site/）と試験の根（repo の根）が違うから。",
+    "site:build は Pages に出す物を全部建てる（viewer → docs の順）。vite build は `dist-site` を空にするので、",
+    "逆にすると docs が消える。docs-site を --filter でなく --dir で呼ぶのは、--filter は名前が外れても",
+    "終了コード 0 で何もしないから。site:dev は viewer だけ、docs:dev は docs だけ。",
     "dependencies の fflate は .warc.gz を member ごとに解くため（onmember で member の頭が分かる。",
     "ブラウザの DecompressionStream は member の境目を教えない）。読み手（src/map/）が使う。",
     "check:spec-anchors は fork の公開の頁を読むので、check にも CI にも入れない（手元で回す）。"
@@ -26,12 +29,14 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "site:dev": "vite",
-    "site:build": "vite build",
+    "site:build": "vite build && pnpm --dir docs-site run build",
+    "site:check": "pnpm run site:build && node scripts/check-doc-refs.ts",
     "site:preview": "vite preview",
+    "docs:dev": "pnpm --dir docs-site run dev",
     "check:spec-anchors": "node scripts/check-spec-anchors.ts",
     "examples:build": "node scripts/make-examples.ts",
     "audit": "pnpm audit --audit-level=low",
-    "check": "pnpm run audit && pnpm run typecheck && pnpm run lint && pnpm test && pnpm run site:build"
+    "check": "pnpm run audit && pnpm run typecheck && pnpm run lint && pnpm test && pnpm run site:check"
   },
   "author": "Takahito Urai",
   "license": "Unlicense",

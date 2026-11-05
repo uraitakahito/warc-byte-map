@@ -1,0 +1,5 @@
+# 依存（root からの pnpm install で再現するので追跡しない）
+node_modules/
+
+# Astro が生成する型・キャッシュ
+.astro/
