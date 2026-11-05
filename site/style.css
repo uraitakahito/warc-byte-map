@@ -80,3 +80,13 @@ button, .button {
 .caret { border: 0; background: none; padding: 0 2px; width: 1.2em; color: var(--sub); font-size: 11px; }
 .tree li.foldable.open > .row .caret { transform: rotate(90deg); }
 .tree li:not(.foldable) > .row { padding-left: calc(6px + 1.2em); }
+.payload { border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; margin: 0 0 8px; background: #fafbff; }
+.pd { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; padding: 3px 0; }
+.pd .label { font-weight: 600; min-width: 11em; }
+.pd code { font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+.pd button { font-size: 12px; padding: 1px 8px; }
+.result.ok { color: #117a5a; font-weight: 600; }
+.result.bad { color: var(--warn); font-weight: 600; }
+.result.warn { color: #9a5d00; font-weight: 600; }
+.repro { width: 100%; font-size: 12px; color: var(--sub); }
+.repro code { display: block; white-space: pre-wrap; overflow-wrap: anywhere; background: #f0f2f8; padding: 4px 6px; border-radius: 4px; }

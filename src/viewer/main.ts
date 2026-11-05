@@ -4,13 +4,24 @@
  * 部分の木の行と hex の octet は互いに強調し合う。いま見ている物は URL の hash に書く
  * （hash.ts）ので、その URL がそのまま link になる。
  */
-import { fieldText, lastField, mapWarc } from "../map/index.ts";
+import { base32, digestChecks, digestMatches, fieldText, lastField, mapWarc, type DigestCheck } from "../map/index.ts";
 import { deepestAt, findPart, partTree, type PartKind, type PartNode } from "../map/parts.ts";
 import type { Span } from "../map/span.ts";
 import type { FieldMap, RecordMap, WarcMap } from "../map/types.ts";
 import { formatHash, parseHash, type ViewState } from "./hash.ts";
+import { digestOf } from "./digest.ts";
 import { glyph, hex2, visibleRanges } from "./hex.ts";
-import { FIELD_SECTIONS, PROBLEMS, SPEC_PAGE, TERMS, sectionUrl, type Lang, type Section } from "./terms.ts";
+import {
+  FIELD_SECTIONS,
+  HTTP_SECTIONS,
+  PAYLOAD_SECTION,
+  PROBLEMS,
+  SPEC_PAGE,
+  TERMS,
+  sectionUrl,
+  type Lang,
+  type Section,
+} from "./terms.ts";
 
 /** 開ける file の上限。読み手は 100 MiB を 0.2 秒で読む（2026-11-05 に測った）ので、決めるのはメモリ。 */
 const MAX_BYTES = 256 * 1024 * 1024;
@@ -20,7 +31,9 @@ const PRIMER = "https://uraitakahito.github.io/warc-specifications/primers/web-a
 const EXAMPLE = `${PRIMER}hello-world.warc`;
 const GZIP_MAGIC = [0x1f, 0x8b];
 /** 既定で畳む節。名前・コロン・値などの葉が多く、開いたままだとカードが長くなる。 */
-const FOLDABLE: ReadonlySet<PartKind> = new Set(["version", "field", "folded", "unreadable"]);
+const FOLDABLE: ReadonlySet<PartKind> = new Set(["version", "field", "folded", "unreadable", "http-start-line", "http-field", "chunk"]);
+/** application/http の block の中の節。§ は record の type で変わる（request は §6.5.2）。 */
+const HTTP_KINDS: ReadonlySet<PartKind> = new Set(["http-head", "http-start-line", "http-start-text", "http-field", "http-blank", "entity"]);
 
 const UI = {
   tagline: { ja: "WARC の仕様の用語が、file のどの byte を指すかを見る", en: "See which bytes of a WARC file each term of the specification refers to" },
@@ -47,6 +60,22 @@ const UI = {
   omitted: { ja: "octet を省いた", en: "octets omitted" },
   spec: { ja: "注釈つきの WARC 1.1", en: "Annotated WARC 1.1" },
   other: { ja: "English", en: "日本語" },
+  payload: { ja: "payload", en: "Payload" },
+  payloadHere: { ja: "この record の中", en: "In this record" },
+  payloadRanges: { ja: "個の範囲", en: "ranges" },
+  payloadRevisit: { ja: "この record には無い（revisit の元の record の物）", en: "Not in this record (it belongs to the record this revisit refers to)" },
+  payloadSegment: { ja: "この record には無い（segment に割った logical record の物）", en: "Not in this record (it belongs to the segmented logical record)" },
+  payloadNotDefined: { ja: "この type の payload を、仕様は定めていない", en: "The specification defines no payload for this type" },
+  payloadUnreadable: { ja: "block を読めないので、範囲を決められない", en: "The block cannot be read, so the payload cannot be located" },
+  show: { ja: "強調", en: "Highlight" },
+  computing: { ja: "計算している…", en: "Computing…" },
+  match: { ja: "一致", en: "Matches" },
+  mismatch: { ja: "不一致。計算した値", en: "Does not match. Computed" },
+  matchRaw: { ja: "chunk のまま（Transfer-Encoding を解かない entity）に掛けると一致する", en: "Matches when computed over the entity as transferred (chunked)" },
+  noAlgorithm: { ja: "この算法は WebCrypto に無いので計算できない", en: "This algorithm is not available in WebCrypto" },
+  badDigest: { ja: "値の形が「算法:値」でない", en: "The value is not in the form algorithm:value" },
+  nothingHere: { ja: "掛ける bytes がこの record に無い", en: "No bytes in this record to compute over" },
+  reproduce: { ja: "再現", en: "Reproduce" },
   back: { ja: "ほかの file を開く", en: "Open another file" },
 } as const;
 
@@ -71,8 +100,8 @@ let view: ViewState = parseHash(location.hash);
 let loaded: Loaded | undefined;
 let shown: Shown | undefined;
 let status: { text: string; error: boolean } | undefined;
-/** 強調している範囲（hover と、選んだ物）。 */
-const lit: Record<"hover" | "sel", Span | undefined> = { hover: undefined, sel: undefined };
+/** 強調している範囲（hover と、選んだ物）。payload は範囲が複数になりうる。 */
+const lit: Record<"hover" | "sel", readonly Span[]> = { hover: [], sel: [] };
 
 const lang = (): Lang => view.lang ?? (navigator.language.toLowerCase().startsWith("ja") ? "ja" : "en");
 const tr = (text: Readonly<Record<Lang, string>>): string => text[lang()];
@@ -102,15 +131,14 @@ const withoutSelection = ({ part: _part, bytes: _bytes, ...rest }: ViewState): V
 
 // ── 強調 ──
 
-const paint = (which: "hover" | "sel", span: Span | undefined): void => {
+const paint = (which: "hover" | "sel", spans: readonly Span[]): void => {
   const cells = shown?.cells;
   if (cells === undefined) return;
-  const before = lit[which];
-  if (before !== undefined) {
+  for (const before of lit[which]) {
     for (let o = before.start; o < before.end; o++) cells.get(o)?.forEach((c) => { c.classList.remove(which); });
   }
-  lit[which] = span;
-  if (span !== undefined) {
+  lit[which] = spans;
+  for (const span of spans) {
     for (let o = span.start; o < span.end; o++) cells.get(o)?.forEach((c) => { c.classList.add(which); });
   }
 };
@@ -135,8 +163,20 @@ const markRow = (which: "hover" | "sel", id: string | undefined): void => {
   if (row !== undefined) visibleRow(row).classList.add(which);
 };
 
+/**
+ * hex の pane を、offset の octet が見える所まで送る。pane が自分で送れるとき（3 列）だけ動かし、
+ * 頁そのものは送らない（1 列・2 列で頁が飛ばないように）。
+ */
+const scrollHexTo = (offset: number | undefined): void => {
+  const cell = offset === undefined ? undefined : shown?.cells.get(offset)?.[0];
+  const pane = cell?.closest<HTMLElement>(".hex");
+  if (cell === undefined || pane === null || pane === undefined || pane.scrollHeight <= pane.clientHeight) return;
+  const top = cell.getBoundingClientRect().top - pane.getBoundingClientRect().top + pane.scrollTop;
+  if (top < pane.scrollTop || top > pane.scrollTop + pane.clientHeight - 24) pane.scrollTop = top - pane.clientHeight / 3;
+};
+
 const hover = (node: PartNode | undefined): void => {
-  paint("hover", node?.span);
+  paint("hover", node === undefined ? [] : [node.span]);
   markRow("hover", node?.id);
 };
 
@@ -147,29 +187,50 @@ const select = (node: PartNode, scroll = false): void => {
     reveal(row);
     row.scrollIntoView({ block: "nearest" });
   }
-  paint("sel", node.span);
+  paint("sel", [node.span]);
+  scrollHexTo(node.span.start);
   markRow("sel", node.id);
   view = { ...withoutSelection(view), part: node.id, bytes: node.span };
   writeHash();
 };
 
 const selectBytes = (span: Span): void => {
-  paint("sel", span);
+  paint("sel", [span]);
+  scrollHexTo(span.start);
   markRow("sel", undefined);
   view = { ...withoutSelection(view), bytes: span };
+  writeHash();
+};
+
+/** payload の範囲（chunked なら複数）を選ぶ。hash には part=payload と書く。 */
+const selectPayload = (): void => {
+  const payload = shown?.record.payload;
+  const spans = payload?.kind === "here" ? payload.spans : [];
+  paint("sel", spans);
+  scrollHexTo(spans[0]?.start);
+  markRow("sel", undefined);
+  view = { ...withoutSelection(view), part: "payload" };
   writeHash();
 };
 
 // ── 部分の木 ──
 
 const fieldOf = (record: RecordMap, node: PartNode): FieldMap | undefined => {
-  const line = record.fields[Number(/^line\.(\d+)$/.exec(node.id)?.[1] ?? -1)];
+  const warc = /^line\.(\d+)$/.exec(node.id)?.[1];
+  const http = /^block\.head\.line\.(\d+)$/.exec(node.id)?.[1];
+  const line = warc !== undefined ? record.fields[Number(warc)] : http !== undefined ? record.http?.fields[Number(http)] : undefined;
   return line?.kind === "field" ? line : undefined;
+};
+
+const recordType = (bytes: Uint8Array, record: RecordMap): string => {
+  const field = lastField(bytes, record.fields, "WARC-Type");
+  return field === undefined ? "" : fieldText(bytes, field).toLowerCase();
 };
 
 const sectionOf = (bytes: Uint8Array, record: RecordMap, node: PartNode): Section | undefined => {
   const field = node.kind === "field" ? fieldOf(record, node) : undefined;
   const named = field === undefined ? undefined : FIELD_SECTIONS[text(bytes, field.name).toLowerCase()];
+  if (HTTP_KINDS.has(node.kind)) return recordType(bytes, record) === "request" ? HTTP_SECTIONS.request : HTTP_SECTIONS.response;
   return named ?? TERMS[node.kind].section;
 };
 
@@ -178,7 +239,8 @@ const lineEnd = (bytes: Uint8Array, span: Span): string =>
 
 const preview = (bytes: Uint8Array, record: RecordMap, node: PartNode): string => {
   switch (node.kind) {
-    case "field": {
+    case "field":
+    case "http-field": {
       const field = fieldOf(record, node);
       return field === undefined ? "" : clip(`${text(bytes, field.name)}: ${fieldText(bytes, field)}`);
     }
@@ -188,11 +250,27 @@ const preview = (bytes: Uint8Array, record: RecordMap, node: PartNode): string =
     case "field-value":
     case "unreadable":
     case "unreadable-content":
+    case "http-start-text":
+    case "chunk-size":
       return clip(text(bytes, node.kind === "version" ? record.version.text : node.span).trimEnd());
+    case "http-start-line":
+      return record.http === undefined ? "" : clip(text(bytes, record.http.startLine.text));
     case "line-end":
     case "separator":
     case "blank":
+    case "http-blank":
       return length(node.span) === 0 ? tr(UI.none) : lineEnd(bytes, node.span);
+    case "entity": {
+      const declared = record.http === undefined ? undefined : lastField(bytes, record.http.fields, "Content-Length");
+      const http = declared === undefined || record.http?.chunked !== undefined ? "" : `（HTTP の Content-Length: ${fieldText(bytes, declared)}）`;
+      return `${String(length(node.span))} ${tr(UI.octets)}${http}`;
+    }
+    case "chunk-data":
+    case "chunk-end":
+      return `${String(length(node.span))} ${tr(UI.octets)}`;
+    case "http-head":
+    case "chunk":
+      return "";
     case "space":
     case "indent":
       return length(node.span) === 0 ? tr(UI.none) : lineEnd(bytes, node.span).replaceAll("20", "SP").replaceAll("09", "HT");
@@ -236,6 +314,89 @@ const treeItem = (bytes: Uint8Array, record: RecordMap, node: PartNode, rows: Ma
   }
   item.append(el("ul", {}, ...node.children.map((c) => treeItem(bytes, record, c, rows))));
   return item;
+};
+
+// ── payload と digest ──
+
+/** sha1:… の 1 つの範囲の hash を、手元の shell で計算し直す 1 行。 */
+const reproduceLine = (span: Span, algorithm: string, fileName: string): HTMLElement => {
+  const file = `'${fileName.replaceAll("'", "'\\''")}'`;
+  const python = `python3 -c 'import sys,hashlib,base64;print(base64.b32encode(hashlib.new("${algorithm.replace("-", "")}",sys.stdin.buffer.read()).digest()).decode())'`;
+  const command = `tail -c +${String(span.start + 1)} ${file} | head -c ${String(length(span))} | ${python}`;
+  return el("div", { class: "repro" }, el("span", {}, tr(UI.reproduce)), el("code", {}, command));
+};
+
+type Tone = "ok" | "bad" | "warn" | "";
+
+/** 欄の値と計算した hash を比べた結果の文と色。 */
+const digestVerdict = async (bytes: Uint8Array, check: DigestCheck): Promise<[string, Tone]> => {
+  if (check.declared === undefined) return [tr(UI.badDigest), "bad"];
+  if (check.spans.length === 0) return [tr(UI.nothingHere), ""];
+  const hash = await digestOf(check.declared.algorithm, bytes, check.spans);
+  if (hash === undefined) return [tr(UI.noAlgorithm), ""];
+  if (digestMatches(hash, check.declared.value)) return [`${tr(UI.match)} ✓`, "ok"];
+  const raw = check.alternative === undefined ? undefined : await digestOf(check.declared.algorithm, bytes, check.alternative);
+  if (raw !== undefined && digestMatches(raw, check.declared.value)) return [tr(UI.matchRaw), "warn"];
+  return [`${tr(UI.mismatch)} ${base32(hash)} ✗`, "bad"];
+};
+
+const digestRow = (bytes: Uint8Array, check: DigestCheck, fileName: string): HTMLElement => {
+  const section = FIELD_SECTIONS[check.name.toLowerCase()];
+  const result = el("span", { class: "result" }, tr(UI.computing));
+  const show = el("button", { type: "button" }, tr(UI.show));
+  show.addEventListener("click", () => {
+    const block = shown === undefined ? undefined : findPart(shown.tree, "block");
+    if (check.name === "WARC-Payload-Digest") selectPayload();
+    else if (block !== undefined) select(block, true);
+  });
+  const row = el(
+    "div",
+    { class: "pd" },
+    el("span", { class: "label" }, check.name),
+    el("code", {}, text(bytes, check.field.value)),
+    result,
+    check.spans.length > 0 ? show : "",
+    section === undefined ? "" : el("a", { class: "sec", href: sectionUrl(section), target: "_blank", rel: "noopener" }, `§${section.number}`),
+  );
+  const [only] = check.spans;
+  if (check.spans.length === 1 && only !== undefined && check.declared !== undefined) row.append(reproduceLine(only, check.declared.algorithm, fileName));
+  digestVerdict(bytes, check).then(
+    ([message, tone]) => {
+      result.textContent = message;
+      result.className = `result ${tone}`;
+    },
+    (error: unknown) => {
+      result.textContent = error instanceof Error ? error.message : String(error);
+    },
+  );
+  return row;
+};
+
+/** payload の在り処と、2 つの digest（在る物だけ）の区画。 */
+const payloadSection = (bytes: Uint8Array, record: RecordMap, fileName: string): HTMLElement => {
+  const p = record.payload;
+  const total = p.kind === "here" ? p.spans.reduce((n, s) => n + length(s), 0) : 0;
+  const what =
+    p.kind === "here"
+      ? `${tr(UI.payloadHere)}: ${String(total)} ${tr(UI.octets)}${p.spans.length > 1 ? `（${String(p.spans.length)} ${tr(UI.payloadRanges)}）` : ""}`
+      : p.kind === "elsewhere"
+        ? tr(p.reason === "revisit" ? UI.payloadRevisit : UI.payloadSegment)
+        : tr(p.kind === "not-defined" ? UI.payloadNotDefined : UI.payloadUnreadable);
+  const show = el("button", { type: "button" }, tr(UI.show));
+  show.addEventListener("click", () => { selectPayload(); });
+  return el(
+    "div",
+    { class: "payload" },
+    el(
+      "div",
+      { class: "pd" },
+      el("span", { class: "label" }, tr(UI.payload)),
+      el("span", {}, what),
+      p.kind === "here" ? show : "",
+      el("a", { class: "sec", href: sectionUrl(PAYLOAD_SECTION), target: "_blank", rel: "noopener" }, `§${PAYLOAD_SECTION.number}`),
+    ),
+    ...digestChecks(bytes, record).map((check) => digestRow(bytes, check, fileName)),
+  );
 };
 
 // ── hex ──
@@ -293,8 +454,8 @@ const showRecord = (record: RecordMap): void => {
   const tree = partTree(record);
   const cells = new Map<number, HTMLElement[]>();
   const rows = new Map<string, HTMLElement>();
-  lit.hover = undefined;
-  lit.sel = undefined;
+  lit.hover = [];
+  lit.sel = [];
 
   const problems = record.problems.map((p) => {
     const item = el("li", {}, el("span", { class: "range" }, rangeText(p.span)), " ", tr(PROBLEMS[p.code]));
@@ -306,6 +467,7 @@ const showRecord = (record: RecordMap): void => {
     { class: "card" },
     el("h2", {}, `record #${String(record.index)}`, el("span", { class: "range" }, rangeText(record.record))),
     problems.length === 0 ? "" : el("div", { class: "problems" }, el("h3", {}, tr(UI.problems)), el("ul", {}, ...problems)),
+    payloadSection(bytes, record, loaded.name),
     el("ul", { class: "tree" }, treeItem(bytes, record, tree, rows)),
   );
   const hex = hexPane(bytes, record, tree, cells);
@@ -408,6 +570,10 @@ const render = (): void => {
   const record = loaded.map.records.find((r) => r.record.start === view.rec) ?? loaded.map.records[0];
   if (record === undefined) return;
   showRecord(record);
+  if (view.part === "payload") {
+    selectPayload();
+    return;
+  }
   const part = view.part === undefined || shown === undefined ? undefined : findPart(shown.tree, view.part);
   if (part !== undefined) select(part, true);
   else if (view.bytes !== undefined) selectBytes(view.bytes);

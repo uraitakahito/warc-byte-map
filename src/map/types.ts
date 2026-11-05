@@ -69,7 +69,11 @@ export type ProblemCode =
   /** Content-Length の値の先に、record を閉じる並びが無い。span はその値。 */
   | "content-length-mismatch"
   /** block の後に、record を閉じる並びが無い。span は長さ 0 の区切り。 */
-  | "no-terminator";
+  | "no-terminator"
+  /** application/http の block の中に、HTTP の header を閉じる空行が無い。span は block。 */
+  | "http-no-blank-line"
+  /** Transfer-Encoding: chunked と言うのに、chunk の形に読めない。span は entity。 */
+  | "chunked-malformed";
 
 export interface Problem {
   readonly code: ProblemCode;
@@ -80,6 +84,52 @@ export interface Problem {
   /** content-length-mismatch のときだけ: 次の record の頭で区切り直して数えた block の長さ。 */
   readonly actual?: number;
 }
+
+/** HTTP の start line（`HTTP/1.1 200 OK` や `GET / HTTP/1.1`）と改行。 */
+export interface StartLine {
+  readonly line: Span;
+  readonly text: Span;
+  readonly eol: Span;
+}
+
+/** chunked の 1 つの chunk。line = size・sizeEol・data・dataEol。 */
+export interface ChunkMap {
+  readonly line: Span;
+  /** 長さの行の中身（16 進の長さと、在れば chunk の拡張）。 */
+  readonly size: Span;
+  readonly sizeEol: Span;
+  readonly data: Span;
+  readonly dataEol: Span;
+}
+
+/**
+ * application/http の block の中。block = head・entity、head = start line・欄・空行。
+ * chunked なら entity = chunks・end。
+ */
+export interface HttpMap {
+  readonly head: Span;
+  readonly startLine: StartLine;
+  readonly fields: readonly HeaderLine[];
+  readonly blank: Span;
+  /** 空行の後の、block の終わりまで（HTTP の message-body）。 */
+  readonly entity: Span;
+  readonly chunked?: {
+    readonly chunks: readonly ChunkMap[];
+    /** 長さ 0 の最後の chunk・trailer・終わりの改行（entity の終わりまで）。 */
+    readonly end: Span;
+  };
+}
+
+/** payload の在り処。record の type ごとの定め（WARC 1.1 の §6）で決める。 */
+export type Payload =
+  /** この record の中に在る。chunked なら chunk の data ごとの範囲が並ぶ（つなぐと payload）。 */
+  | { readonly kind: "here"; readonly spans: readonly Span[] }
+  /** 別の record の物（revisit の元の record・segment に割った logical record）。 */
+  | { readonly kind: "elsewhere"; readonly reason: "revisit" | "segment" }
+  /** この type（や scheme）の payload を、仕様が定めていない。 */
+  | { readonly kind: "not-defined" }
+  /** 定めは在るが、block を読めないので範囲を決められない。 */
+  | { readonly kind: "unreadable" };
 
 /** 1 つの record。record = header・block・separator、header = version・fields・blank。 */
 export interface RecordMap {
@@ -92,6 +142,9 @@ export interface RecordMap {
   /** header を閉じる空行（CR LF か LF）。 */
   readonly blank: Span;
   readonly block: Span;
+  /** block が application/http で、その header を読めたとき: block の中。 */
+  readonly http?: HttpMap;
+  readonly payload: Payload;
   /** record を閉じる並び（CR LF CR LF。LF で書いた record は LF LF）。無ければ長さ 0。 */
   readonly separator: Span;
   readonly problems: readonly Problem[];
