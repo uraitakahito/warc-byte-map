@@ -9,7 +9,9 @@
     "typecheck は 2 回走る。2 回目の `src/map/tsconfig.json` は DOM と Node の型を持たないので、",
     "読み手が document や node:* に触れると、そこで赤になる。",
     "Vite の設定（`vite.config.ts`）と Vitest の設定（`vitest.config.ts`）を分けたのは、",
-    "頁の根（site/）と試験の根（repo の根）が違うから。"
+    "頁の根（site/）と試験の根（repo の根）が違うから。",
+    "dependencies の fflate は .warc.gz を member ごとに解くため（onmember で member の頭が分かる。",
+    "ブラウザの DecompressionStream は member の境目を教えない）。読み手（src/map/）が使う。"
   ],
   "name": "warc-byte-map",
   "version": "0.0.0",
@@ -44,5 +46,8 @@
   "packageManager": "pnpm@11.20.0+sha512.9a6f330a95b66446ea088faf1521405a8a01f07fde7124cc9958dfed52d4bb436737e65b08f85f37b46fcba375092558ac51262b816844b22f63406ed166bfee",
   "engines": {
     "node": ">=24"
+  },
+  "dependencies": {
+    "fflate": "0.8.3"
   }
 }
