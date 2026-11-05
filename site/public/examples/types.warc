@@ -1,0 +1,203 @@
+WARC/1.1
+WARC-Type: warcinfo
+WARC-Date: 2026-11-05T00:00:00Z
+WARC-Record-ID: <urn:uuid:7e5d0000-0000-4000-8000-000000000001>
+WARC-Filename: types.warc
+Content-Type: application/warc-fields
+WARC-Block-Digest: sha1:BAU32RTNWOJWZSWKQCQHLHEJWPUJXA73
+Content-Length: 461
+
+software: warc-byte-map examples (scripts/make-examples.ts)
+format: WARC File Format 1.1
+conformsTo: http://iipc.github.io/warc-specifications/specifications/warc-format/warc-1.1/
+description: One record of each WARC record type, written for warc-byte-map.
+note: The two chunked responses carry WARC-Payload-Digest over the de-chunked entity-body (RFC 2616, record 8) and over the entity as transferred (record 11). Tools differ on which one they compute.
+
+
+WARC/1.1
+WARC-Type: request
+WARC-Target-URI: http://example.test/
+WARC-Date: 2026-11-05T00:00:00Z
+WARC-Record-ID: <urn:uuid:7e5d0000-0000-4000-8000-000000000002>
+WARC-Warcinfo-ID: <urn:uuid:7e5d0000-0000-4000-8000-000000000001>
+WARC-Concurrent-To: <urn:uuid:7e5d0000-0000-4000-8000-000000000003>
+Content-Type: application/http;msgtype=request
+WARC-Block-Digest: sha1:6VKQS5ZT7RVOAFZUU654TOYEZTF6O2MX
+WARC-Payload-Digest: sha1:3I42H3S6NNFQ2MSVX7XZKYAYSCX5QBYJ
+Content-Length: 73
+
+GET / HTTP/1.1
+Host: example.test
+User-Agent: warc-byte-map-example
+
+
+
+WARC/1.1
+WARC-Type: response
+WARC-Target-URI: http://example.test/
+WARC-Date: 2026-11-05T00:00:00Z
+WARC-Record-ID: <urn:uuid:7e5d0000-0000-4000-8000-000000000003>
+WARC-Warcinfo-ID: <urn:uuid:7e5d0000-0000-4000-8000-000000000001>
+WARC-Concurrent-To: <urn:uuid:7e5d0000-0000-4000-8000-000000000002>
+WARC-IP-Address: 192.0.2.10
+Content-Type: application/http;msgtype=response
+WARC-Block-Digest: sha1:VDRETDMBNNZFXSY3VFV47QL7XLQDZID7
+WARC-Payload-Digest: sha1:RKJM3L3ASVADQ6SY6VC66DLLVSYSQ5OZ
+WARC-Identified-Payload-Type: text/html
+Content-Length: 137
+
+HTTP/1.1 200 OK
+Content-Type: text/html; charset=utf-8
+Content-Length: 58
+
+<!doctype html><title>Example</title><p>Hello, bytes.</p>
+
+
+WARC/1.1
+WARC-Type: metadata
+WARC-Target-URI: http://example.test/
+WARC-Date: 2026-11-05T00:00:00Z
+WARC-Record-ID: <urn:uuid:7e5d0000-0000-4000-8000-000000000004>
+WARC-Warcinfo-ID: <urn:uuid:7e5d0000-0000-4000-8000-000000000001>
+WARC-Refers-To: <urn:uuid:7e5d0000-0000-4000-8000-000000000003>
+Content-Type: application/warc-fields
+WARC-Block-Digest: sha1:V3GPCQGBYWAKUMLDN5LA5STSBC3C2AJI
+Content-Length: 44
+
+via: http://example.test/
+fetchTimeMs: 12
+
+
+WARC/1.1
+WARC-Type: resource
+WARC-Target-URI: dns:example.test
+WARC-Date: 2026-11-05T00:00:00Z
+WARC-Record-ID: <urn:uuid:7e5d0000-0000-4000-8000-000000000005>
+WARC-Warcinfo-ID: <urn:uuid:7e5d0000-0000-4000-8000-000000000001>
+Content-Type: text/dns
+WARC-Block-Digest: sha1:APATB4NHDOEWV377UMDZTVH4C7YTYQI2
+WARC-Payload-Digest: sha1:APATB4NHDOEWV377UMDZTVH4C7YTYQI2
+Content-Length: 49
+
+20261105000000
+example.test.	300	IN	A	192.0.2.10
+
+
+WARC/1.1
+WARC-Type: revisit
+WARC-Target-URI: http://example.test/
+WARC-Date: 2026-11-05T01:00:00Z
+WARC-Record-ID: <urn:uuid:7e5d0000-0000-4000-8000-000000000006>
+WARC-Warcinfo-ID: <urn:uuid:7e5d0000-0000-4000-8000-000000000001>
+WARC-Profile: http://netpreserve.org/warc/1.1/revisit/identical-payload-digest
+WARC-Refers-To: <urn:uuid:7e5d0000-0000-4000-8000-000000000003>
+WARC-Refers-To-Target-URI: http://example.test/
+WARC-Refers-To-Date: 2026-11-05T00:00:00Z
+Content-Type: application/http;msgtype=response
+WARC-Block-Digest: sha1:TEWJ7RWHGRVCH6GFL5I4PVVRS374F2HZ
+WARC-Payload-Digest: sha1:RKJM3L3ASVADQ6SY6VC66DLLVSYSQ5OZ
+Content-Length: 79
+
+HTTP/1.1 200 OK
+Content-Type: text/html; charset=utf-8
+Content-Length: 58
+
+
+
+WARC/1.1
+WARC-Type: conversion
+WARC-Target-URI: http://example.test/
+WARC-Date: 2026-11-05T01:00:00Z
+WARC-Record-ID: <urn:uuid:7e5d0000-0000-4000-8000-000000000007>
+WARC-Warcinfo-ID: <urn:uuid:7e5d0000-0000-4000-8000-000000000001>
+WARC-Refers-To: <urn:uuid:7e5d0000-0000-4000-8000-000000000003>
+Content-Type: text/plain
+WARC-Block-Digest: sha1:YFZLEDF56F4IRRII32YOXAGVWG6LE4EA
+WARC-Payload-Digest: sha1:YFZLEDF56F4IRRII32YOXAGVWG6LE4EA
+Content-Length: 22
+
+Example
+Hello, bytes.
+
+
+WARC/1.1
+WARC-Type: response
+WARC-Target-URI: http://example.test/chunked
+WARC-Date: 2026-11-05T00:00:00Z
+WARC-Record-ID: <urn:uuid:7e5d0000-0000-4000-8000-000000000008>
+WARC-Warcinfo-ID: <urn:uuid:7e5d0000-0000-4000-8000-000000000001>
+Content-Type: application/http;msgtype=response
+WARC-Block-Digest: sha1:V3WIIF4TQCLOEG4PC76EKK6ZYZWIAEIS
+WARC-Payload-Digest: sha1:I4LNRA6LWXESF75HUXE5SK2AMHOJ5VOZ
+Content-Length: 146
+
+HTTP/1.1 200 OK
+Content-Type: text/html; charset=utf-8
+Transfer-Encoding: chunked
+
+1a
+<!doctype html><p>Sent in 
+10
+two chunks.</p>
+
+0
+
+
+
+WARC/1.1
+WARC-Type: response
+WARC-Target-URI: http://example.test/large
+WARC-Date: 2026-11-05T00:00:00Z
+WARC-Record-ID: <urn:uuid:7e5d0000-0000-4000-8000-000000000009>
+WARC-Warcinfo-ID: <urn:uuid:7e5d0000-0000-4000-8000-000000000001>
+WARC-Segment-Number: 1
+Content-Type: application/http;msgtype=response
+WARC-Block-Digest: sha1:CRUCQHF4WHHJBGSG4XV5T3FX4L4YGCWQ
+WARC-Payload-Digest: sha1:KXCVNMHZJN4O3TTC4AFJT2RUKH2OG6QA
+Content-Length: 90
+
+HTTP/1.1 200 OK
+Content-Type: text/plain
+Content-Length: 129
+
+0123456789abcdef01234567
+
+WARC/1.1
+WARC-Type: continuation
+WARC-Target-URI: http://example.test/large
+WARC-Date: 2026-11-05T00:00:00Z
+WARC-Record-ID: <urn:uuid:7e5d0000-0000-4000-8000-000000000010>
+WARC-Warcinfo-ID: <urn:uuid:7e5d0000-0000-4000-8000-000000000001>
+WARC-Segment-Origin-ID: <urn:uuid:7e5d0000-0000-4000-8000-000000000009>
+WARC-Segment-Number: 2
+WARC-Segment-Total-Length: 195
+WARC-Block-Digest: sha1:HZW7H4BGZOS3XZ4TYJRVBZNVM3XVCEKK
+Content-Length: 105
+
+89abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+
+
+WARC/1.1
+WARC-Type: response
+WARC-Target-URI: http://example.test/chunked-as-sent
+WARC-Date: 2026-11-05T00:00:00Z
+WARC-Record-ID: <urn:uuid:7e5d0000-0000-4000-8000-000000000011>
+WARC-Warcinfo-ID: <urn:uuid:7e5d0000-0000-4000-8000-000000000001>
+Content-Type: application/http;msgtype=response
+WARC-Block-Digest: sha1:V3WIIF4TQCLOEG4PC76EKK6ZYZWIAEIS
+WARC-Payload-Digest: sha1:UBAFXOJCG75VTG4LM565XLEQEU7CLOSO
+Content-Length: 146
+
+HTTP/1.1 200 OK
+Content-Type: text/html; charset=utf-8
+Transfer-Encoding: chunked
+
+1a
+<!doctype html><p>Sent in 
+10
+two chunks.</p>
+
+0
+
+
+

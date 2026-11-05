@@ -13,13 +13,15 @@ export const fieldText = (bytes: Uint8Array, field: FieldMap): string =>
     .join(" ")
     .replace(/^[ \t]+|[ \t]+$/g, "");
 
+/** 名前が name の欄を、書かれた順に全部。名前の大文字小文字は区別しない（WARC 1.1）。 */
+export const fieldsNamed = (bytes: Uint8Array, lines: readonly HeaderLine[], name: string): FieldMap[] => {
+  const wanted = name.toLowerCase();
+  return lines.filter((line): line is FieldMap => line.kind === "field" && latin1(bytes, line.name).toLowerCase() === wanted);
+};
+
 /**
- * 名前が name の欄のうち、最後の物。名前の大文字小文字は区別しない（WARC 1.1）。
+ * 名前が name の欄のうち、最後の物。
  * 同じ名前が繰り返されたときに後の物を使うのは、wacz-validator の読み手と同じ。
  */
-export const lastField = (bytes: Uint8Array, lines: readonly HeaderLine[], name: string): FieldMap | undefined => {
-  const wanted = name.toLowerCase();
-  return lines
-    .filter((line): line is FieldMap => line.kind === "field")
-    .findLast((field) => latin1(bytes, field.name).toLowerCase() === wanted);
-};
+export const lastField = (bytes: Uint8Array, lines: readonly HeaderLine[], name: string): FieldMap | undefined =>
+  fieldsNamed(bytes, lines, name).at(-1);

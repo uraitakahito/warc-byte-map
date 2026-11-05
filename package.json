@@ -29,6 +29,7 @@
     "site:build": "vite build",
     "site:preview": "vite preview",
     "check:spec-anchors": "node scripts/check-spec-anchors.ts",
+    "examples:build": "node scripts/make-examples.ts",
     "audit": "pnpm audit --audit-level=low",
     "check": "pnpm run audit && pnpm run typecheck && pnpm run lint && pnpm test && pnpm run site:build"
   },
