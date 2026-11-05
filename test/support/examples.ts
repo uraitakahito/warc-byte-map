@@ -24,7 +24,7 @@ export const minimalRecords: readonly RecordSpec[] = [
       { name: "Content-Type", value: "application/http;msgtype=request" },
       length,
     ],
-    block: "GET / HTTP/1.1\r\nHost: example.test\r\n\r\n",
+    block: { startLine: "GET / HTTP/1.1", lines: [{ name: "Host", value: "example.test" }], entity: "" },
   },
   {
     lines: [
@@ -37,7 +37,14 @@ export const minimalRecords: readonly RecordSpec[] = [
       length,
     ],
     // payload が LF LF で終わる（record を閉じる CR LF CR LF が、その直後に続く）
-    block: "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 14\r\n\r\nhello, bytes\n\n",
+    block: {
+      startLine: "HTTP/1.1 200 OK",
+      lines: [
+        { name: "Content-Type", value: "text/plain" },
+        { name: "Content-Length", value: "14" },
+      ],
+      entity: "hello, bytes\n\n",
+    },
   },
   {
     lines: [

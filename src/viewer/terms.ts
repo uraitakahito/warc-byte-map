@@ -26,6 +26,14 @@ export interface Term {
 
 const MODEL: Section = { number: "4", anchor: "file-and-record-model" };
 
+/** application/http の block の中の節。request の record なら §6.5.2、それ以外は §6.3.2。 */
+export const HTTP_SECTIONS = {
+  response: { number: "6.3.2", anchor: "http-and-https-schemes" },
+  request: { number: "6.5.2", anchor: "http-and-https-schemes-2" },
+} as const satisfies Record<string, Section>;
+
+export const PAYLOAD_SECTION: Section = { number: "3.1.3", anchor: "warc-record-payload" };
+
 export const TERMS: Record<PartKind, Term> = {
   record: {
     label: { ja: "WARC record", en: "WARC record" },
@@ -88,6 +96,40 @@ export const TERMS: Record<PartKind, Term> = {
     note: { ja: "header の後の、Content-Length 個の octet。", en: "The Content-Length octets after the header." },
     section: { number: "3.1.2", anchor: "warc-record-content-block" },
   },
+  "http-head": {
+    label: { ja: "HTTP の header", en: "HTTP header" },
+    note: { ja: "start line・欄・空行。payload には入らない。", en: "Start line, fields and an empty line. Not part of the payload." },
+    section: HTTP_SECTIONS.response,
+  },
+  "http-start-line": {
+    label: { ja: "HTTP の start line", en: "HTTP start line" },
+    note: { ja: "応答なら HTTP/1.1 200 OK、要求なら GET / HTTP/1.1 の形。", en: "HTTP/1.1 200 OK for a response, GET / HTTP/1.1 for a request." },
+    section: HTTP_SECTIONS.response,
+  },
+  "http-start-text": { label: { ja: "start line の中身", en: "Start line text" }, section: HTTP_SECTIONS.response },
+  "http-field": { label: { ja: "HTTP の欄", en: "HTTP field" }, section: HTTP_SECTIONS.response },
+  "http-blank": { label: { ja: "HTTP の header を閉じる空行", en: "Empty line closing the HTTP header" }, section: HTTP_SECTIONS.response },
+  entity: {
+    label: { ja: "entity-body（HTTP の本体）", en: "Entity-body" },
+    note: {
+      ja: "空行の後の、block の終わりまで。response と request では、これが payload（chunked なら解いた物）。",
+      en: "From the empty line to the end of the block. For responses and requests this is the payload (de-chunked if chunked).",
+    },
+    section: HTTP_SECTIONS.response,
+  },
+  chunk: {
+    label: { ja: "chunk", en: "Chunk" },
+    note: { ja: "16 進の長さの行・data・改行（RFC 2616 の §3.6.1）。", en: "A hexadecimal size line, the data and a line end (RFC 2616 §3.6.1)." },
+  },
+  "chunk-size": { label: { ja: "chunk の長さ（16 進）", en: "Chunk size (hex)" } },
+  "chunk-data": {
+    label: { ja: "chunk の data", en: "Chunk data" },
+    note: { ja: "chunk の data をつなぐと payload になる。", en: "The chunk data, joined, make the payload." },
+  },
+  "chunk-end": {
+    label: { ja: "最後の chunk と trailer", en: "Last chunk and trailer" },
+    note: { ja: "長さ 0 の chunk・trailer・終わりの改行。payload には入らない。", en: "The zero-size chunk, the trailer and the final line end. Not part of the payload." },
+  },
   separator: {
     label: { ja: "record を閉じる CRLF CRLF", en: "CRLF CRLF closing the record" },
     note: { ja: "block の後の 2 つの改行。block の中身ではない。", en: "Two line ends after the block; not part of it." },
@@ -130,6 +172,14 @@ export const PROBLEMS: Record<ProblemCode, Record<Lang, string>> = {
   "content-length-form": { ja: "Content-Length の値が数でないので、次の record の頭で block を区切った。", en: "Content-Length is not a number, so the block was cut at the start of the next record." },
   "content-length-mismatch": { ja: "Content-Length の先に record を閉じる並びが無いので、区切り直した。", en: "No closing sequence where Content-Length points, so the block was cut again." },
   "no-terminator": { ja: "block の後に、record を閉じる CRLF CRLF が無い。", en: "No CRLF CRLF closes the record after the block." },
+  "http-no-blank-line": {
+    ja: "HTTP の header を閉じる空行が block の中に無いので、entity と payload を決められない。",
+    en: "No empty line closes the HTTP header inside the block, so the entity and the payload cannot be located.",
+  },
+  "chunked-malformed": {
+    ja: "Transfer-Encoding: chunked と言うのに、chunk の形に読めない。payload を決められない。",
+    en: "Transfer-Encoding says chunked, but the entity is not in chunked form, so the payload cannot be located.",
+  },
 };
 
 export const sectionUrl = (section: Section): string => `${SPEC_PAGE}#${section.anchor}`;

@@ -11,6 +11,8 @@
 import { ascii, indexOfSequence, startsWithAt } from "./bytes.ts";
 import { fieldText, lastField } from "./fields.ts";
 import { RECORD_HEAD, readHeader, type Header } from "./header.ts";
+import { isHttpBlock, mapHttp } from "./http.ts";
+import { payloadOf } from "./payload.ts";
 import { spanLength, type Span } from "./span.ts";
 import type { Problem, RecordMap, WarcMap } from "./types.ts";
 
@@ -76,6 +78,7 @@ const mapRecord = (bytes: Uint8Array, header: Header, index: number): RecordMap 
   const { body, problems } = readBody(bytes, header);
   const terminatorProblems: Problem[] =
     spanLength(body.separator) === 0 ? [{ code: "no-terminator", span: body.separator }] : [];
+  const httpRead = isHttpBlock(bytes, header.fields) ? mapHttp(bytes, body.block) : undefined;
   return {
     index,
     record: { start: header.header.start, end: body.separator.end },
@@ -84,8 +87,12 @@ const mapRecord = (bytes: Uint8Array, header: Header, index: number): RecordMap 
     fields: header.fields,
     blank: header.blank,
     block: body.block,
+    ...(httpRead?.http !== undefined && { http: httpRead.http }),
+    payload: payloadOf(bytes, header.fields, body.block, httpRead),
     separator: body.separator,
-    problems: [...header.problems, ...problems, ...terminatorProblems].sort((a, b) => a.span.start - b.span.start),
+    problems: [...header.problems, ...problems, ...(httpRead?.problems ?? []), ...terminatorProblems].sort(
+      (a, b) => a.span.start - b.span.start,
+    ),
   };
 };
 

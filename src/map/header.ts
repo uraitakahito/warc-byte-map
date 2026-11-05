@@ -11,6 +11,7 @@
  * 行は LF で探し、直前が CR かを行ごとに見る（LF だけの行も読み、lf-line-ending を言う）。
  * 空白かタブで始まる行は、前の欄の値の続き（折り返し）。読み方の規則は wacz-validator の
  * `warc-records.ts`・`named-fields.ts` から写した。違うのは、値を整えずに範囲で返すこと。
+ * 欄の行の読み方（readFieldBlock）は、block の中の HTTP の欄にも使う。
  */
 import { COLON, CR, LF, ascii, isBlank, latin1, skipBlanks, startsWithAt } from "./bytes.ts";
 import { spanLength, type Span } from "./span.ts";
@@ -28,16 +29,16 @@ const TCHAR = new Set(
   Array.from("!#$%&'*+-.^_`|~0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz", (c) => c.charCodeAt(0)),
 );
 
-interface Line {
+export interface Line {
   readonly line: Span;
   readonly content: Span;
   readonly eol: Span;
 }
 
-/** start から LF までの 1 行。LF が無ければ undefined（行が閉じていない）。 */
-const readLine = (bytes: Uint8Array, start: number): Line | undefined => {
+/** start から LF までの 1 行（end より前で閉じる物だけ）。LF が無ければ undefined。 */
+export const readLine = (bytes: Uint8Array, start: number, end: number): Line | undefined => {
   const lf = bytes.indexOf(LF, start);
-  if (lf === -1) return undefined;
+  if (lf === -1 || lf >= end) return undefined;
   const eolStart = lf > start && bytes[lf - 1] === CR ? lf - 1 : lf;
   return { line: { start, end: lf + 1 }, content: { start, end: eolStart }, eol: { start: eolStart, end: lf + 1 } };
 };
@@ -49,8 +50,7 @@ const readFieldStart = (bytes: Uint8Array, line: Line): Omit<FieldMap, "line" | 
   for (let i = line.content.start; i < colonAt; i++) {
     if (!TCHAR.has(bytes[i] ?? -1)) return undefined;
   }
-  const afterColon = { start: colonAt + 1, end: line.content.end };
-  const valueStart = skipBlanks(bytes, afterColon);
+  const valueStart = skipBlanks(bytes, { start: colonAt + 1, end: line.content.end });
   return {
     kind: "field",
     name: { start: line.content.start, end: colonAt },
@@ -69,6 +69,57 @@ const foldedLine = (bytes: Uint8Array, line: Line): FoldedLine => {
     value: { start: valueStart, end: line.content.end },
     eol: line.eol,
   };
+};
+
+export interface FieldBlock {
+  readonly fields: readonly HeaderLine[];
+  readonly blank: Span;
+  /** bad-field-line と folded-line。 */
+  readonly problems: readonly Problem[];
+  /** LF だけで終わる最初の行の改行（空行も含めて数える）。 */
+  readonly bareLf?: Span;
+}
+
+/**
+ * start から、空行までの欄の行を読む（end を越えない）。空行の前に end に来れば undefined。
+ */
+export const readFieldBlock = (bytes: Uint8Array, start: number, end: number): FieldBlock | undefined => {
+  const problems: Problem[] = [];
+  const fields: HeaderLine[] = [];
+  let bareLf: Span | undefined;
+  // 折り返しの行が続いてよい欄。次の欄の行・読めない行・空行で閉じて fields に入れる。
+  let open: { start: Omit<FieldMap, "line" | "folded">; folded: FoldedLine[] } | undefined;
+  const close = (): void => {
+    if (open === undefined) return;
+    const last = (open.folded.at(-1)?.line ?? open.start.eol).end;
+    fields.push({ ...open.start, line: { start: open.start.name.start, end: last }, folded: open.folded });
+    open = undefined;
+  };
+
+  for (let at = start; ; ) {
+    const line = readLine(bytes, at, end);
+    if (line === undefined) return undefined;
+    if (bareLf === undefined && spanLength(line.eol) === 1) bareLf = line.eol;
+    at = line.line.end;
+
+    if (spanLength(line.content) === 0) {
+      close();
+      return { fields, blank: line.line, problems, ...(bareLf !== undefined && { bareLf }) };
+    }
+    if (isBlank(bytes[line.content.start]) && open !== undefined) {
+      open.folded.push(foldedLine(bytes, line));
+      problems.push({ code: "folded-line", span: line.line });
+      continue;
+    }
+    close();
+    const field = isBlank(bytes[line.content.start]) ? undefined : readFieldStart(bytes, line);
+    if (field === undefined) {
+      fields.push({ kind: "unreadable", line: line.line, content: line.content, eol: line.eol });
+      problems.push({ code: "bad-field-line", span: line.line });
+    } else {
+      open = { start: field, folded: [] };
+    }
+  }
 };
 
 export interface Header {
@@ -90,7 +141,7 @@ export type HeaderResult =
  */
 export const readHeader = (bytes: Uint8Array, start: number): HeaderResult => {
   const rest = { start, end: bytes.length };
-  const first = readLine(bytes, start);
+  const first = readLine(bytes, start, bytes.length);
   if (first === undefined) {
     const code = startsWithAt(bytes, RECORD_HEAD, start) ? "no-blank-line" : "no-version-line";
     return { ok: false, problem: { code, span: rest } };
@@ -98,53 +149,17 @@ export const readHeader = (bytes: Uint8Array, start: number): HeaderResult => {
   if (spanLength(first.content) > VERSION_MAX || !VERSION.test(latin1(bytes, first.content))) {
     return { ok: false, problem: { code: "no-version-line", span: rest } };
   }
-
-  const problems: Problem[] = [];
-  const fields: HeaderLine[] = [];
-  let bareLf = spanLength(first.eol) === 1 ? first.eol : undefined;
-  // 折り返しの行が続いてよい欄。次の欄の行・読めない行・空行で閉じて fields に入れる。
-  let open: { start: Omit<FieldMap, "line" | "folded">; folded: FoldedLine[] } | undefined;
-  const close = (): void => {
-    if (open === undefined) return;
-    const end = (open.folded.at(-1)?.line ?? open.start.eol).end;
-    fields.push({ ...open.start, line: { start: open.start.name.start, end }, folded: open.folded });
-    open = undefined;
+  const block = readFieldBlock(bytes, first.line.end, bytes.length);
+  if (block === undefined) return { ok: false, problem: { code: "no-blank-line", span: rest } };
+  const bareLf = spanLength(first.eol) === 1 ? first.eol : block.bareLf;
+  return {
+    ok: true,
+    value: {
+      header: { start, end: block.blank.end },
+      version: { line: first.line, text: first.content, eol: first.eol },
+      fields: block.fields,
+      blank: block.blank,
+      problems: [...(bareLf === undefined ? [] : [{ code: "lf-line-ending" as const, span: bareLf }]), ...block.problems],
+    },
   };
-
-  for (let at = first.line.end; ; ) {
-    const line = readLine(bytes, at);
-    if (line === undefined) return { ok: false, problem: { code: "no-blank-line", span: rest } };
-    if (bareLf === undefined && spanLength(line.eol) === 1) bareLf = line.eol;
-    at = line.line.end;
-
-    if (spanLength(line.content) === 0) {
-      close();
-      if (bareLf !== undefined) problems.push({ code: "lf-line-ending", span: bareLf });
-      return {
-        ok: true,
-        value: {
-          header: { start, end: line.line.end },
-          version: { line: first.line, text: first.content, eol: first.eol },
-          fields,
-          blank: line.line,
-          problems,
-        },
-      };
-    }
-
-    if (isBlank(bytes[line.content.start]) && open !== undefined) {
-      open.folded.push(foldedLine(bytes, line));
-      problems.push({ code: "folded-line", span: line.line });
-      continue;
-    }
-
-    close();
-    const field = isBlank(bytes[line.content.start]) ? undefined : readFieldStart(bytes, line);
-    if (field === undefined) {
-      fields.push({ kind: "unreadable", line: line.line, content: line.content, eol: line.eol });
-      problems.push({ code: "bad-field-line", span: line.line });
-    } else {
-      open = { start: field, folded: [] };
-    }
-  }
 };
