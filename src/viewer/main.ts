@@ -4,7 +4,19 @@
  * 部分の木の行と hex の octet は互いに強調し合う。いま見ている物は URL の hash に書く
  * （hash.ts）ので、その URL がそのまま link になる。
  */
-import { base32, digestChecks, digestMatches, fieldText, lastField, mapWarc, type DigestCheck } from "../map/index.ts";
+import {
+  base32,
+  digestChecks,
+  digestMatches,
+  fieldText,
+  gunzipMembers,
+  isGzip,
+  lastField,
+  mapWarc,
+  type DigestCheck,
+  type Inflated,
+  type MemberMap,
+} from "../map/index.ts";
 import { deepestAt, findPart, partTree, type PartKind, type PartNode } from "../map/parts.ts";
 import type { Span } from "../map/span.ts";
 import type { FieldMap, RecordMap, WarcMap } from "../map/types.ts";
@@ -29,7 +41,8 @@ const MAX_BYTES = 256 * 1024 * 1024;
 const MAX_LISTED = 5000;
 const PRIMER = "https://uraitakahito.github.io/warc-specifications/primers/web-archive-formats/";
 const EXAMPLE = `${PRIMER}hello-world.warc`;
-const GZIP_MAGIC = [0x1f, 0x8b];
+/** .warc.gz を解いた長さの上限（member の trailer の ISIZE で、解く前に見積もる）。 */
+const MAX_INFLATED = 512 * 1024 * 1024;
 /** 既定で畳む節。名前・コロン・値などの葉が多く、開いたままだとカードが長くなる。 */
 const FOLDABLE: ReadonlySet<PartKind> = new Set(["version", "field", "folded", "unreadable", "http-start-line", "http-field", "chunk"]);
 /** application/http の block の中の節。§ は record の type で変わる（request は §6.5.2）。 */
@@ -42,11 +55,16 @@ const UI = {
     ja: "IIPC の primer の例（WARC/1.0・6 つの record）。fork の頁から読む。",
     en: "The example from the IIPC primer (WARC/1.0, six records), read from the fork's site.",
   },
-  openFile: { ja: "手元の WARC を開く（.warc）", en: "Open a local WARC (.warc)" },
+  openFile: { ja: "手元の WARC を開く（.warc・.warc.gz）", en: "Open a local WARC (.warc, .warc.gz)" },
   dropHint: { ja: "file をこの頁に落としても開ける。手元の file は送られない。", en: "You can also drop a file on this page. Local files are not uploaded." },
   loading: { ja: "読んでいる…", en: "Loading…" },
   tooLarge: { ja: "大きすぎる（256 MiB まで）。", en: "Too large (up to 256 MiB)." },
-  gzip: { ja: "圧縮した WARC（.warc.gz）は、まだ開けない。", en: "Compressed WARC (.warc.gz) is not supported yet." },
+  gzipBroken: { ja: "gzip の member を解けなかった", en: "Could not inflate a gzip member" },
+  tooLargeInflated: { ja: "解くと大きすぎる（512 MiB まで）。", en: "Too large once inflated (up to 512 MiB)." },
+  members: { ja: "member", en: "gzip members" },
+  inflatedTo: { ja: "解いて", en: "inflated to" },
+  inflatedNote: { ja: "位置は解いた流れの中の位置", en: "Offsets are in the inflated stream" },
+  inFile: { ja: "file の中", en: "in the file" },
   failed: { ja: "読めなかった", en: "Could not load" },
   records: { ja: "record", en: "Records" },
   listCut: { ja: "件目まで並べた", en: "listed" },
@@ -82,10 +100,19 @@ const UI = {
 const utf8 = new TextDecoder("utf-8");
 
 interface Loaded {
+  /** 圧縮していない WARC。.warc.gz なら、解いた流れ。 */
   readonly bytes: Uint8Array;
   readonly map: WarcMap;
   readonly name: string;
+  /** .warc.gz のとき: member と、圧縮した file の大きさ。 */
+  readonly gzip?: { readonly members: readonly MemberMap[]; readonly size: number; readonly error?: Inflated["error"] };
 }
+
+/** record の範囲に重なる member。 */
+const membersOf = (record: RecordMap): readonly MemberMap[] =>
+  loaded?.gzip?.members.filter((m) => m.inflated.start < record.record.end && record.record.start < m.inflated.end) ?? [];
+
+const memberText = (m: MemberMap): string => `member #${String(m.index)}: ${tr(UI.inFile)} ${rangeText(m.compressed)}`;
 
 interface Shown {
   readonly record: RecordMap;
@@ -318,11 +345,15 @@ const treeItem = (bytes: Uint8Array, record: RecordMap, node: PartNode, rows: Ma
 
 // ── payload と digest ──
 
-/** sha1:… の 1 つの範囲の hash を、手元の shell で計算し直す 1 行。 */
-const reproduceLine = (span: Span, algorithm: string, fileName: string): HTMLElement => {
+/**
+ * 1 つの範囲の hash を、手元の shell で計算し直す 1 行。位置は解いた流れの中の位置なので、
+ * .warc.gz なら先に gzip -dc で解く（gzip は member をつないだ file も最後まで解く）。
+ */
+const reproduceLine = (span: Span, algorithm: string, fileName: string, gzip: boolean): HTMLElement => {
   const file = `'${fileName.replaceAll("'", "'\\''")}'`;
+  const from = gzip ? `gzip -dc ${file} | tail -c +${String(span.start + 1)}` : `tail -c +${String(span.start + 1)} ${file}`;
   const python = `python3 -c 'import sys,hashlib,base64;print(base64.b32encode(hashlib.new("${algorithm.replace("-", "")}",sys.stdin.buffer.read()).digest()).decode())'`;
-  const command = `tail -c +${String(span.start + 1)} ${file} | head -c ${String(length(span))} | ${python}`;
+  const command = `${from} | head -c ${String(length(span))} | ${python}`;
   return el("div", { class: "repro" }, el("span", {}, tr(UI.reproduce)), el("code", {}, command));
 };
 
@@ -359,7 +390,9 @@ const digestRow = (bytes: Uint8Array, check: DigestCheck, fileName: string): HTM
     section === undefined ? "" : el("a", { class: "sec", href: sectionUrl(section), target: "_blank", rel: "noopener" }, `§${section.number}`),
   );
   const [only] = check.spans;
-  if (check.spans.length === 1 && only !== undefined && check.declared !== undefined) row.append(reproduceLine(only, check.declared.algorithm, fileName));
+  if (check.spans.length === 1 && only !== undefined && check.declared !== undefined) {
+    row.append(reproduceLine(only, check.declared.algorithm, fileName, loaded?.gzip !== undefined));
+  }
   digestVerdict(bytes, check).then(
     ([message, tone]) => {
       result.textContent = message;
@@ -466,6 +499,7 @@ const showRecord = (record: RecordMap): void => {
     "section",
     { class: "card" },
     el("h2", {}, `record #${String(record.index)}`, el("span", { class: "range" }, rangeText(record.record))),
+    loaded.gzip === undefined ? "" : el("p", { class: "note" }, `${tr(UI.inflatedNote)}。${membersOf(record).map(memberText).join("・")}`),
     problems.length === 0 ? "" : el("div", { class: "problems" }, el("h3", {}, tr(UI.problems)), el("ul", {}, ...problems)),
     payloadSection(bytes, record, loaded.name),
     el("ul", { class: "tree" }, treeItem(bytes, record, tree, rows)),
@@ -494,6 +528,7 @@ const workspace = ({ bytes, map, name }: Loaded): HTMLElement => {
       el("span", { class: "what" }, recordLabel(bytes, record)),
       el("span", { class: "range" }, rangeText(record.record)),
       record.problems.length === 0 ? "" : el("span", { class: "warn" }, "!"),
+      membersOf(record).length === 0 ? "" : el("span", { class: "member" }, membersOf(record).map((m) => `member #${String(m.index)}`).join(" ")),
     );
     item.addEventListener("click", () => { pickRecord(record); });
     return item;
@@ -502,6 +537,16 @@ const workspace = ({ bytes, map, name }: Loaded): HTMLElement => {
     "nav",
     { id: "list" },
     el("h2", {}, name, el("span", { class: "range" }, `${String(map.records.length)} ${tr(UI.records)}`)),
+    loaded?.gzip === undefined
+      ? ""
+      : el(
+          "p",
+          { class: "note" },
+          `gzip: ${String(loaded.gzip.members.length)} ${tr(UI.members)}（${String(loaded.gzip.size)} → ${tr(UI.inflatedTo)} ${String(bytes.length)} ${tr(UI.octets)}）`,
+        ),
+    loaded?.gzip?.error === undefined
+      ? ""
+      : el("p", { class: "rest" }, `${tr(UI.gzipBroken)}: ${tr(UI.inFile)} ${rangeText(loaded.gzip.error.member)} — ${loaded.gzip.error.message}`),
     el("ul", {}, ...items),
     map.records.length > MAX_LISTED ? el("p", { class: "note" }, `${String(MAX_LISTED)} ${tr(UI.listCut)}`) : "",
     map.rest === undefined
@@ -512,7 +557,7 @@ const workspace = ({ bytes, map, name }: Loaded): HTMLElement => {
 };
 
 const startPanel = (): HTMLElement => {
-  const input = el("input", { type: "file", accept: ".warc,application/warc" });
+  const input = el("input", { type: "file", accept: ".warc,.gz,application/warc,application/gzip" });
   input.addEventListener("change", () => {
     const file = input.files?.[0];
     if (file !== undefined) void openFile(file);
@@ -567,7 +612,10 @@ const render = (): void => {
   if (app === null) return;
   app.replaceChildren(topBar(), loaded === undefined ? startPanel() : workspace(loaded));
   if (loaded === undefined) return;
-  const record = loaded.map.records.find((r) => r.record.start === view.rec) ?? loaded.map.records[0];
+  // member= は CDX の offset（圧縮した側）から開くため。その member の中で始まる最初の record を開く
+  const member = view.member === undefined ? undefined : loaded.gzip?.members.find((m) => m.compressed.start === view.member);
+  const fromMember = member === undefined ? undefined : loaded.map.records.find((r) => r.record.start >= member.inflated.start && r.record.start < member.inflated.end);
+  const record = fromMember ?? loaded.map.records.find((r) => r.record.start === view.rec) ?? loaded.map.records[0];
   if (record === undefined) return;
   showRecord(record);
   if (view.part === "payload") {
@@ -582,11 +630,20 @@ const render = (): void => {
 // ── 読み込み ──
 
 const open = (bytes: Uint8Array, name: string): void => {
-  if (GZIP_MAGIC.every((b, i) => bytes[i] === b)) {
-    loaded = undefined;
-    status = { text: tr(UI.gzip), error: true };
-  } else {
+  if (!isGzip(bytes)) {
     loaded = { bytes, map: mapWarc(bytes), name };
+    status = undefined;
+    render();
+    return;
+  }
+  const inflated = gunzipMembers(bytes, MAX_INFLATED);
+  if (inflated.members.length === 0) {
+    loaded = undefined;
+    const why = inflated.error?.kind === "too-large" ? tr(UI.tooLargeInflated) : `${tr(UI.gzipBroken)}: ${inflated.error?.message ?? ""}`;
+    status = { text: why, error: true };
+  } else {
+    const gzip = { members: inflated.members, size: bytes.length, ...(inflated.error !== undefined && { error: inflated.error }) };
+    loaded = { bytes: inflated.bytes, map: mapWarc(inflated.bytes), name, gzip };
     status = undefined;
   }
   render();

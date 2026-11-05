@@ -6,6 +6,7 @@ describe("parseHash と formatHash", () => {
     const state = {
       src: "https://example.test/a b.warc?x=1&y=2",
       rec: 1260,
+      member: 907,
       part: "line.7.value",
       bytes: { start: 2332, end: 2345 },
       lang: "en" as const,

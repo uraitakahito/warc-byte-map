@@ -3,6 +3,9 @@
  *
  *   #src=<WARC の URL>&rec=<record の始めの位置>&part=<部分の id>&bytes=<始め>-<終わり>&lang=ja
  *
+ * 位置は、.warc.gz でも解いた流れの中の位置で書く（1 つの member に record がいくつあっても
+ * 1 つに決まる）。member=<圧縮した file の中の位置> は、CDX の offset から開くために読む。
+ *
  * 読めない値は捨てる（壊れた link でも、読める所までは開く）。
  */
 import type { Span } from "../map/span.ts";
@@ -11,6 +14,7 @@ import type { Lang } from "./terms.ts";
 export interface ViewState {
   readonly src?: string;
   readonly rec?: number;
+  readonly member?: number;
   readonly part?: string;
   readonly bytes?: Span;
   readonly lang?: Lang;
@@ -30,12 +34,14 @@ export const parseHash = (hash: string): ViewState => {
   const params = new URLSearchParams(hash.replace(/^#/, ""));
   const src = params.get("src");
   const rec = offset(params.get("rec"));
+  const member = offset(params.get("member"));
   const part = params.get("part");
   const bytes = range(params.get("bytes"));
   const lang = params.get("lang");
   return {
     ...(src !== null && src !== "" && { src }),
     ...(rec !== undefined && { rec }),
+    ...(member !== undefined && { member }),
     ...(part !== null && part !== "" && { part }),
     ...(bytes !== undefined && { bytes }),
     ...((lang === "ja" || lang === "en") && { lang }),
@@ -46,6 +52,7 @@ export const formatHash = (state: ViewState): string => {
   const params = new URLSearchParams();
   if (state.src !== undefined) params.set("src", state.src);
   if (state.rec !== undefined) params.set("rec", String(state.rec));
+  if (state.member !== undefined) params.set("member", String(state.member));
   if (state.part !== undefined) params.set("part", state.part);
   if (state.bytes !== undefined) params.set("bytes", `${String(state.bytes.start)}-${String(state.bytes.end)}`);
   if (state.lang !== undefined) params.set("lang", state.lang);
