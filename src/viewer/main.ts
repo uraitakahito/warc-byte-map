@@ -13,9 +13,11 @@ import {
   isGzip,
   lastField,
   mapWarc,
+  relationsOf,
   type DigestCheck,
   type Inflated,
   type MemberMap,
+  type Relations,
 } from "../map/index.ts";
 import { deepestAt, findPart, partTree, type PartKind, type PartNode } from "../map/parts.ts";
 import type { Span } from "../map/span.ts";
@@ -55,6 +57,15 @@ const UI = {
     ja: "IIPC の primer の例（WARC/1.0・6 つの record）。fork の頁から読む。",
     en: "The example from the IIPC primer (WARC/1.0, six records), read from the fork's site.",
   },
+  exampleTypes: { ja: "例を開く: types.warc（8 つの type）", en: "Open the example: types.warc (all eight types)" },
+  exampleTypesNote: {
+    ja: "warc-byte-map が書いた WARC/1.1 の例。chunked の response を 2 つ（payload digest の 2 つの読み方）と、2 つに割った record も入れた。",
+    en: "A WARC/1.1 example written for warc-byte-map, with two chunked responses (both readings of the payload digest) and a record split into two segments.",
+  },
+  exampleTypesGz: { ja: "同じ例を .warc.gz で開く（1 record 1 member）", en: "Open the same example as .warc.gz (one member per record)" },
+  relations: { ja: "つながり", en: "Related records" },
+  notInFile: { ja: "この file に無い", en: "Not in this file" },
+  pointedBy: { ja: "ここを指す record", en: "Pointed to by" },
   openFile: { ja: "手元の WARC を開く（.warc・.warc.gz）", en: "Open a local WARC (.warc, .warc.gz)" },
   dropHint: { ja: "file をこの頁に落としても開ける。手元の file は送られない。", en: "You can also drop a file on this page. Local files are not uploaded." },
   loading: { ja: "読んでいる…", en: "Loading…" },
@@ -104,6 +115,7 @@ interface Loaded {
   readonly bytes: Uint8Array;
   readonly map: WarcMap;
   readonly name: string;
+  readonly relations: Relations;
   /** .warc.gz のとき: member と、圧縮した file の大きさ。 */
   readonly gzip?: { readonly members: readonly MemberMap[]; readonly size: number; readonly error?: Inflated["error"] };
 }
@@ -432,6 +444,37 @@ const payloadSection = (bytes: Uint8Array, record: RecordMap, fileName: string):
   );
 };
 
+/** つながりの欄（ほかの record を指す欄）と、ここを指す record。相手が同じ file に在れば開ける。 */
+const relationsSection = (bytes: Uint8Array, record: RecordMap): HTMLElement | "" => {
+  if (loaded === undefined) return "";
+  const { map, relations } = loaded;
+  const outgoing = relations.outgoing[record.index] ?? [];
+  const incoming = relations.incoming[record.index] ?? [];
+  if (outgoing.length === 0 && incoming.length === 0) return "";
+  const go = (index: number): HTMLElement => {
+    const target = map.records[index];
+    const button = el("button", { type: "button" }, `#${String(index)} ${target === undefined ? "" : recordLabel(bytes, target)}`);
+    button.addEventListener("click", () => {
+      if (target !== undefined) pickRecord(target);
+    });
+    return button;
+  };
+  const rows = [
+    ...outgoing.map((r) => {
+      const section = FIELD_SECTIONS[r.name.toLowerCase()];
+      return el(
+        "div",
+        { class: "pd" },
+        el("span", { class: "label" }, r.name),
+        r.target === undefined ? el("span", { class: "note" }, `${clip(r.value, 60)}（${tr(UI.notInFile)}）`) : go(r.target),
+        section === undefined ? "" : el("a", { class: "sec", href: sectionUrl(section), target: "_blank", rel: "noopener" }, `§${section.number}`),
+      );
+    }),
+    ...incoming.map((r) => el("div", { class: "pd" }, el("span", { class: "label" }, tr(UI.pointedBy)), go(r.from), el("span", { class: "note" }, r.name))),
+  ];
+  return el("div", { class: "payload" }, el("h3", {}, tr(UI.relations)), ...rows);
+};
+
 // ── hex ──
 
 const hexPane = (bytes: Uint8Array, record: RecordMap, tree: PartNode, cells: Map<number, HTMLElement[]>): HTMLElement => {
@@ -502,6 +545,7 @@ const showRecord = (record: RecordMap): void => {
     loaded.gzip === undefined ? "" : el("p", { class: "note" }, `${tr(UI.inflatedNote)}。${membersOf(record).map(memberText).join("・")}`),
     problems.length === 0 ? "" : el("div", { class: "problems" }, el("h3", {}, tr(UI.problems)), el("ul", {}, ...problems)),
     payloadSection(bytes, record, loaded.name),
+    relationsSection(bytes, record),
     el("ul", { class: "tree" }, treeItem(bytes, record, tree, rows)),
   );
   const hex = hexPane(bytes, record, tree, cells);
@@ -567,6 +611,8 @@ const startPanel = (): HTMLElement => {
     { class: "start" },
     el("p", {}, el("a", { class: "button", href: formatHash({ src: EXAMPLE, ...(view.lang !== undefined && { lang: view.lang }) }) }, tr(UI.example))),
     el("p", { class: "note" }, tr(UI.exampleNote), " ", el("a", { href: PRIMER, target: "_blank", rel: "noopener" }, "primer")),
+    el("p", {}, el("a", { class: "button", href: formatHash({ src: "examples/types.warc", ...(view.lang !== undefined && { lang: view.lang }) }) }, tr(UI.exampleTypes))),
+    el("p", { class: "note" }, tr(UI.exampleTypesNote), " ", el("a", { href: formatHash({ src: "examples/types.warc.gz", ...(view.lang !== undefined && { lang: view.lang }) }) }, tr(UI.exampleTypesGz))),
     el("p", {}, el("label", { class: "button" }, tr(UI.openFile), input)),
     el("p", { class: "note" }, tr(UI.dropHint)),
     status === undefined ? "" : el("p", { class: status.error ? "error" : "note" }, status.text),
@@ -631,7 +677,8 @@ const render = (): void => {
 
 const open = (bytes: Uint8Array, name: string): void => {
   if (!isGzip(bytes)) {
-    loaded = { bytes, map: mapWarc(bytes), name };
+    const map = mapWarc(bytes);
+    loaded = { bytes, map, name, relations: relationsOf(bytes, map.records) };
     status = undefined;
     render();
     return;
@@ -643,7 +690,8 @@ const open = (bytes: Uint8Array, name: string): void => {
     status = { text: why, error: true };
   } else {
     const gzip = { members: inflated.members, size: bytes.length, ...(inflated.error !== undefined && { error: inflated.error }) };
-    loaded = { bytes: inflated.bytes, map: mapWarc(inflated.bytes), name, gzip };
+    const map = mapWarc(inflated.bytes);
+    loaded = { bytes: inflated.bytes, map, name, relations: relationsOf(inflated.bytes, map.records), gzip };
     status = undefined;
   }
   render();

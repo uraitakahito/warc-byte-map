@@ -91,3 +91,4 @@ button, .button {
 .repro { width: 100%; font-size: 12px; color: var(--sub); }
 .repro code { display: block; white-space: pre-wrap; overflow-wrap: anywhere; background: #f0f2f8; padding: 4px 6px; border-radius: 4px; }
 #list li .member { grid-column: 2; color: var(--sub); font-family: var(--mono); font-size: 11.5px; }
+.payload h3 { font-size: 13px; margin: 2px 0 4px; }
