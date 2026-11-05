@@ -6,7 +6,7 @@ next: false
 
 ## 手元で動かす
 
-Node 24 と pnpm 11 が要ります。
+Node 26 と pnpm 11 が要ります。
 
 ```sh
 pnpm install
