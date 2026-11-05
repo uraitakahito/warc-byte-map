@@ -11,7 +11,8 @@
     "Vite の設定（`vite.config.ts`）と Vitest の設定（`vitest.config.ts`）を分けたのは、",
     "頁の根（site/）と試験の根（repo の根）が違うから。",
     "dependencies の fflate は .warc.gz を member ごとに解くため（onmember で member の頭が分かる。",
-    "ブラウザの DecompressionStream は member の境目を教えない）。読み手（src/map/）が使う。"
+    "ブラウザの DecompressionStream は member の境目を教えない）。読み手（src/map/）が使う。",
+    "check:spec-anchors は fork の公開の頁を読むので、check にも CI にも入れない（手元で回す）。"
   ],
   "name": "warc-byte-map",
   "version": "0.0.0",
@@ -27,6 +28,7 @@
     "site:dev": "vite",
     "site:build": "vite build",
     "site:preview": "vite preview",
+    "check:spec-anchors": "node scripts/check-spec-anchors.ts",
     "audit": "pnpm audit --audit-level=low",
     "check": "pnpm run audit && pnpm run typecheck && pnpm run lint && pnpm test && pnpm run site:build"
   },
