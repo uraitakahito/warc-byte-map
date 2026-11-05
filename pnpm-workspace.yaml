@@ -1,3 +1,7 @@
+# docs-site も同じ workspace に入れる（lockfile を 1 本にする）。audit も docs の依存まで見る。
+packages:
+  - "docs-site"
+
 # audit から外す勧告。外すのは、上流が修正版を受け取れず、override でも越えられないものだけ。
 # 1 件ごとに、なぜ越えられないかと、外す条件を書く。
 auditConfig:

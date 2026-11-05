@@ -1,6 +1,10 @@
 # yaml-language-server: $schema=https://json.schemastore.org/dependabot-2.0.json
 #
 # Dependabot が読むのは default branch（main）に在るこの file だけ。PR も main へ出す。
+#
+# pnpm の workspace で lockfile は root の 1 本だけなので、npm の entry も root の 1 つだけ。
+# `directory: /` が docs-site も見る。`directory: /docs-site` を足すと、lockfile に触らない PR が
+# できて CI が落ちる（capture-ledger で 2026-08-22 に実際に落ちた）。分けるのは groups で。
 version: 2
 updates:
   - package-ecosystem: npm
@@ -12,7 +16,8 @@ updates:
     cooldown:
       default-days: 3
       semver-major-days: 7
-    open-pull-requests-limit: 3
+    # グループ 3 つ（docs-site・production・development）に 1 本ずつと、余り 1 本。
+    open-pull-requests-limit: 4
     versioning-strategy: increase
     ignore:
       # typescript は major を上げない。typescript-eslint の peer が TS 7 を含まず
@@ -22,10 +27,23 @@ updates:
       - dependency-name: "typescript"
         update-types: ["version-update:semver-major"]
     groups:
+      # docs-site/package.json の依存は全部このグループへ。依存を足したら 3 か所とも足す。
+      # 順番に頼らず exclude-patterns で除くのは、capture-ledger で docs の依存が dependency-type の
+      # 側にも入り、別々の PR に割れたことがあるから（2026-09）。
+      docs-site:
+        patterns:
+          - "astro"
+          - "@astrojs/*"
       development-dependencies:
         dependency-type: development
+        exclude-patterns:
+          - "astro"
+          - "@astrojs/*"
       production-dependencies:
         dependency-type: production
+        exclude-patterns:
+          - "astro"
+          - "@astrojs/*"
 
   - package-ecosystem: github-actions
     directory: /

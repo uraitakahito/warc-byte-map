@@ -5,9 +5,9 @@ import tseslint from "typescript-eslint";
 import importXPlugin from "eslint-plugin-import-x";
 
 export default defineConfig(
-  // tsc の project の外にある物（この file と、建てた頁）は見ない
+  // tsc の project の外にある物（この file と、建てた頁と、Astro の型で動く docs-site）は見ない
   {
-    ignores: ["dist-site/**", "node_modules/**", "eslint.config.js"],
+    ignores: ["dist-site/**", "node_modules/**", "eslint.config.js", "docs-site/**"],
   },
 
   eslint.configs.recommended,

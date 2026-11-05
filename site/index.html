@@ -9,6 +9,12 @@
   </head>
   <body>
     <div id="app"></div>
-    <script type="module" src="../src/viewer/main.ts"></script>
+    <!--
+      src="../src/…" と書かない。頁の根（site/）の外なので、vite dev は base の外の /src/… に
+      書き換えて 404 にする。インラインの import なら、この file からの相対で解決される。
+    -->
+    <script type="module">
+      import "../src/viewer/main.ts";
+    </script>
   </body>
 </html>
