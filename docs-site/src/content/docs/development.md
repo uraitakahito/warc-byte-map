@@ -6,7 +6,7 @@ next: false
 
 ## Run it locally
 
-Requires Node 24 and pnpm 11.
+Requires Node 26 and pnpm 11.
 
 ```sh
 pnpm install
