@@ -14,7 +14,7 @@ export default defineConfig({
   // 本文の /warc-byte-map/… を /warc-byte-map/docs/warc-byte-map/… に書き換える）。行き先は
   // check-doc-refs.ts が建てた HTML で確かめる。相対は URL の末尾の / で行き先が変わるので、揃える。
   trailingSlash: "always",
-  // 手元の口は 5292 に固める。塞がっていたら、別の口へ逃げずに落ちる（vite.config.ts と同じ理由）。
+  // 手元のポートは 5292 に固める。塞がっていたら、別のポートへ逃げずに落ちる（vite.config.ts と同じ理由）。
   server: { port: 5292 },
   vite: { server: { strictPort: true } },
   integrations: [
