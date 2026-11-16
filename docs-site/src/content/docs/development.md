@@ -59,4 +59,6 @@ To publish a tag again:
 gh workflow run pages.yml --ref vX.Y.Z
 ```
 
-The tag is the only version. The `version` in `package.json` is not one.
+The tag goes on the merge commit of a pull request titled `release: vX.Y.Z — summary`, which also
+sets `version` in `package.json` to `X.Y.Z`; `.github/workflows/release-version.yml` fails it when
+the two differ.

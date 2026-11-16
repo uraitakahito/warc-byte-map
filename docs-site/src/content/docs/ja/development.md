@@ -59,4 +59,4 @@ Vite のサーバ（`site:dev` と `site:preview`）は `.gz` のファイルに
 gh workflow run pages.yml --ref vX.Y.Z
 ```
 
-版はタグだけです。`package.json` の `version` は版ではありません。
+タグは、題が `release: vX.Y.Z — 要約` の PR の merge の commit に打ちます。その PR で `package.json` の `version` も `X.Y.Z` に上げ、2 つが食い違うと `.github/workflows/release-version.yml` が赤にします。
